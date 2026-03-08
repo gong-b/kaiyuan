@@ -327,25 +327,24 @@ def batch_extract(uploaded_docx_files, blacklist, newhongji_list, participate_li
 def main():
     # 页面配置
     st.set_page_config(
-        page_title="浙江大学开源课堂报名表解析工具",
-        page_icon="📋",
+        page_title="浙江大学开源课堂报名审核",
         layout="wide",
         initial_sidebar_state="collapsed"
     )
     
     # 页面标题
-    st.title("📋 浙江大学开源课堂报名表解析工具")
+    st.title("浙江大学开源课堂报名审核")
     st.divider()
     
     # 分栏布局
     col_operate, col_result = st.columns([1, 2.5])
     
     with col_operate:
-        st.header("⚙️ 操作区")
+        st.header("文件上传区域")
         
         # 1. 批量上传报名表docx文件（核心修改：替换tkinter文件夹选择）
         uploaded_docx_files = st.file_uploader(
-            "📁 批量上传报名表docx文件（可多选）",
+            "📁 批量上传报名表docx文件",
             type=["docx"],
             accept_multiple_files=True,
             help="按住Ctrl键可多选文件，支持批量上传"
@@ -358,7 +357,7 @@ def main():
         participate_file = st.file_uploader("📝 本学年参加名单文件（xlsx/txt）", type=["xlsx", "xls", "txt"])
         
         # 3. 解析按钮
-        if st.button("🚀 开始批量解析（按班级分组）", type="primary"):
+        if st.button("开始审核", type="primary"):
             # 读取名单
             blacklist = read_name_list(blacklist_file, "黑名单")
             newhongji_list = read_name_list(newhongji_file, "新鸿基名单")
@@ -374,7 +373,7 @@ def main():
                     
                     # 显示结果预览
                     with col_result:
-                        st.header("📊 结果预览")
+                        st.header("结果预览")
                         result_df = pd.DataFrame(sorted_info)
                         st.dataframe(
                             result_df,
@@ -392,20 +391,20 @@ def main():
                     
                     # 下载按钮
                     st.download_button(
-                        label="📥 下载按班级分组的Excel",
+                        label="下载审核结果的Excel",
                         data=excel_data,
-                        file_name="报名表信息汇总（按班级分组）.xlsx",
+                        file_name="报名表信息汇总.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
 
     # 页面说明
     st.divider()
-    st.markdown("### 📌 使用说明")
-    st.markdown("1. 批量上传报名表docx文件（可多选）；")
-    st.markdown("2. 上传黑名单、新鸿基名单、本学年参加名单（Excel/TXT格式，需含姓名列）；")
-    st.markdown("3. 点击解析按钮，等待完成后下载Excel文件；")
-    st.markdown("4. Excel文件按班级分组，报名成功列标色（绿色=成功，红色=失败）。")
+    st.markdown("📌 使用说明")
+    st.markdown("1. 可以批量上传报名表docx文件；")
+    st.markdown("2. 上传黑名单、新鸿基名单、本学年参加名单（Excel/TXT格式，必需含姓名列）；")
+    st.markdown("3. 点击解析按钮，等待完成后可以下载Excel文件；")
 
 if __name__ == "__main__":
     main()
+
