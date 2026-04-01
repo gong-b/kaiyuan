@@ -17,7 +17,7 @@ xhj_ids = excel.读取学生ID("新鸿基名单.xlsx")
     last_ids = excel.读取学生ID("去年名单.xlsx")
 
     # 收邮件
-    client = EmailClient(配置。EMAIL_HOST, 配置,EMAIL_PORT, 配置。EMAIL_USER, 配置。EMAIL_PASS)
+    client = EmailClient(配置。EMAIL_HOST, 配置,EMAIL_PORT, 配置,EMAIL_USER, 配置,EMAIL_PASS)
 邮件 = 客户端.fetch_mails()
 info(f" 共收取邮件：{len(邮件)}封")
 
