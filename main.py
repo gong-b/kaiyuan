@@ -1,28 +1,28 @@
-import logging
-from email_client import EmailClient
-from excel_handler import ExcelHandler
-from docx_parser import DocxParser
-from email_processor import EmailProcessor
+import日志记录
+来自电子邮件客户端import电子邮件客户端
+来自Excel处理程序importExcel处理程序
+来自Docx解析器importDocx解析器
+来自 email_processor import EmailProcessor
 import config
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-def main():
+def 主():
     logging.info("✅ 开始筛选")
 
     # 读取上传的3个名单
-    excel = ExcelHandler()
-    xhj_ids = excel.read_student_ids("新鸿基名单.xlsx")
-    black_ids = excel.read_student_ids("黑名单.xlsx")
-    last_ids = excel.read_student_ids("去年名单.xlsx")
+    excel = Excel处理程序()
+xhj_ids = excel。读取学生ID("新鸿基名单.xlsx")
+    black_ids = excel.读取学生ID("黑名单.xlsx")
+    last_ids = excel.读取学生ID("去年名单.xlsx")
 
     # 收邮件
-    client = EmailClient(config.EMAIL_HOST, config.EMAIL_PORT, config.EMAIL_USER, config.EMAIL_PASS)
-    mails = client.fetch_mails()
-    logging.info(f"📩 共收取邮件：{len(mails)}封")
+    client = EmailClient(配置。EMAIL_HOST, 配置。EMAIL_PORT, 配置。EMAIL_USER, 配置。EMAIL_PASS)
+邮件 = 客户端.fetch_mails()
+info(f" 共收取邮件：{len(邮件)}封")
 
-    accept = []
-    reject = []
+接受 = []
+拒绝 = []
 
     for mail in mails:
         sid = mail.get("student_id")
