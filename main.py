@@ -12,7 +12,7 @@ def 主():
 
     # 读取上传的3个名单
     excel = Excel处理程序()
-xhj_ids = excel。读取学生ID("新鸿基名单.xlsx")
+xhj_ids = excel.读取学生ID("新鸿基名单.xlsx")
     black_ids = excel.读取学生ID("黑名单.xlsx")
     last_ids = excel.读取学生ID("去年名单.xlsx")
 
