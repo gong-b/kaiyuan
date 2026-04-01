@@ -37,20 +37,20 @@ if st.button("▶️ 开始自动筛选"):
                 errors="replace"
             )
 
-st.(“运行日志”)
-st.代码(result.stdout+ result.stderr)
+            st.subheader("📝 运行日志")
+            st.code(result.stdout + result.stderr)
 
             # 录取名单
-            ifos.path.exists(“录取名单.xlsx”):
+            if os.path.exists("录取名单.xlsx"):
                 st.success("✅ 筛选完成！")
                 df1 = pd.read_excel("录取名单.xlsx")
                 st.subheader("🥳 录取名单")
                 st.dataframe(df1, use_container_width=True)
                 with open("录取名单.xlsx", "rb") as f:
-第(“下载录取名单”, f,“录取名单.xlsx)
+                    st.download_button("下载录取名单", f, "录取名单.xlsx")
 
             # 拒绝名单
-            ifos.path.exists(“拒绝名单.xlsx”):
+            if os.path.exists("拒绝名单.xlsx"):
                 df2 = pd.read_excel("拒绝名单.xlsx")
                 st.subheader("❌ 拒绝名单")
                 st.dataframe(df2, use_container_width=True)
@@ -58,6 +58,6 @@ st.代码(result.stdout+ result.stderr)
                     st.download_button("下载拒绝名单", f, "拒绝名单.xlsx")
 
         except Exception as e:
-st.错误(f"失败：{str(e)}")
+            st.error(f"失败：{str(e)}")
 
-(“系统会自动收取浙大邮箱邮件 → 自动审核 → 自动生成名单”)
+st.info("💡 系统会自动收取浙大邮箱邮件 → 自动审核 → 自动生成名单")
