@@ -4,33 +4,71 @@ import re
 class DocxParser:
     def __init__(self, file_path):
         self.file_path = file_path
-        self.text = ""
-        self.read_text()
+        self.full_text = ""
+        self.is_subsidy = False
+        self.real_reason = ""
+        self.reason_count = 0
 
-    def read_text(self):
+        # 一次性解析完所有内容
+        self.parse_all()
+
+    def parse_all(self):
         try:
             doc = Document(self.file_path)
-            text = []
-            # 读取段落
-            for para in doc.paragraphs:
-                text.append(para.text.strip())
-            # 读取表格
+            text_list = []
+
+            # 读取所有表格内容（你的申请表全在表格里）
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        text.append(cell.text.strip())
-            self.text = "\n".join(text)
-        except:
-            self.text = ""
+                        cell_txt = cell.text.strip()
+                        text_list.append(cell_txt)
 
+            # 合并所有文本
+            self.full_text = "\n".join(text_list)
+
+            # 1. 判断是否资助对象
+            self.check_subsidy()
+
+            # 2. 提取真实申请理由（只提取理由正文）
+            self.extract_reason()
+
+        except Exception as e:
+            self.full_text = ""
+            self.is_subsidy = False
+            self.real_reason = ""
+            self.reason_count = 0
+
+    def check_subsidy(self):
+        # 匹配你的表格：是否为学生资助对象 | 是
+        if "是否为学生资助对象" in self.full_text:
+            # 后面跟着“是”才判定为资助对象
+            self.is_subsidy = "是" in self.full_text
+
+    def extract_reason(self):
+        # 按你的表格结构：从“申请理由（不少于100字）”后面开始提取正文
+        reason_split = re.split(
+            r"申请理由\s*[（\(]\s*不少于\s*100\s*字\s*[）\)]\s*[：:]",
+            self.full_text,
+            flags=re.I
+        )
+
+        if len(reason_split) >= 2:
+            reason = reason_split[1].strip()
+
+            # 去掉多余空行、空格、换行
+            reason = re.sub(r"\s+", " ", reason)
+            reason = reason.strip()
+
+            self.real_reason = reason
+            self.reason_count = len(reason)
+        else:
+            self.real_reason = ""
+            self.reason_count = 0
+
+    # 给外部调用的接口
     def is_subsidy(self):
-        """判断是否为资助对象"""
-        keywords = ["是", "资助", "困难", "助学金", "贫困"]
-        return any(key in self.text for key in keywords)
+        return self.is_subsidy
 
     def get_reason_length(self):
-        """统计申请理由有效字数（去除空白）"""
-        # 去除所有空白字符
-        clean_text = re.sub(r"\s+", "", self.text)
-        # 返回纯中文/数字/字母长度
-        return len(clean_text)
+        return self.reason_count
