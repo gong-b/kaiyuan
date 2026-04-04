@@ -7,25 +7,34 @@ import pandas as pd
 st.set_page_config(page_title="书法班报名筛选系统", page_icon="🎓", layout="wide")
 st.title("🎓 浙江大学书法班报名自动筛选系统")
 
-# 上传3个名单
+# 邮箱登录（你要的功能）
+st.subheader("📩 邮箱登录")
+email_user = st.text_input("浙大邮箱", placeholder="xxx@zju.edu.cn")
+email_pass = st.text_input("客户端专用密码", type="password")
+
+# 上传名单
 st.subheader("📂 上传名单文件")
 file_xhj = st.file_uploader("新鸿基学生名单", type=["xlsx"])
-file_black = st.file_uploader("黑名单", type=["xlsx"])
 file_last = st.file_uploader("去年已参加名单", type=["xlsx"])
 
 # 运行按钮
 if st.button("▶️ 开始自动筛选"):
-    if not (file_xhj and file_black and file_last):
-        st.warning("请上传全部3个Excel文件")
+    if not email_user or not email_pass:
+        st.warning("请输入邮箱和客户端专用密码！")
+        st.stop()
+    if not file_xhj or not file_last:
+        st.warning("请上传全部名单！")
         st.stop()
 
     # 保存上传文件
     with open("新鸿基名单.xlsx", "wb") as f:
         f.write(file_xhj.getbuffer())
-    with open("黑名单.xlsx", "wb") as f:
-        f.write(file_black.getbuffer())
     with open("去年名单.xlsx", "wb") as f:
         f.write(file_last.getbuffer())
+
+    # 把邮箱密码传给主程序
+    os.environ["EMAIL_USER"] = email_user
+    os.environ["EMAIL_PASS"] = email_pass
 
     with st.spinner("正在收取邮件、自动审核..."):
         try:
@@ -58,6 +67,6 @@ if st.button("▶️ 开始自动筛选"):
                     st.download_button("下载拒绝名单", f, "拒绝名单.xlsx")
 
         except Exception as e:
-            st.error(f"失败：{str(e)}")
+            st.error(f"运行失败：{str(e)}")
 
-st.info("💡 系统会自动收取浙大邮箱邮件 → 自动审核 → 自动生成名单")
+st.info("💡 密码仅本次运行使用，不会保存")
