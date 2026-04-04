@@ -1,75 +1,77 @@
-import日志记录
-来自电子邮件客户端import电子邮件客户端
-来自Excel处理程序importExcel处理程序
-来自Docx解析器importDocx解析器
-来自 email_processor import EmailProcessor
+import logging
+from email_client import EmailClient
+from excel_handler import ExcelHandler
+from docx_parser import DocxParser
+from email_processor import EmailProcessor
 import config
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-def 主():
+def main():
     logging.info("✅ 开始筛选")
 
     # 读取上传的3个名单
-    excel = Excel处理程序()
-xhj_ids = excel.读取学生ID("新鸿基名单.xlsx")
-    black_ids = excel.读取学生ID("黑名单.xlsx")
-    last_ids = excel.读取学生ID("去年名单.xlsx")
+    excel = ExcelHandler()
+    xhj_ids = excel.read_student_ids("新鸿基名单.xlsx")
+    black_ids = excel.read_student_ids("黑名单.xlsx")
+    last_ids = excel.read_student_ids("去年名单.xlsx")
 
     # 收邮件
-    client = EmailClient(配置,EMAIL_HOST, 配置,EMAIL_PORT, 配置,EMAIL_USER, 配置,EMAIL_PASS)
-邮件 = 客户端.fetch_mails()
-info(f" 共收取邮件：{len(邮件)}封")
+    client = EmailClient(config.EMAIL_HOST, config.EMAIL_PORT, config.EMAIL_USER, config.EMAIL_PASS)
+    mails = client.fetch_mails()
+    logging.info(f"📩 共收取邮件：{len(mails)}封")
 
-接受 = []
-拒绝 = []
+    accept = []
+    reject = []
 
     for mail in mails:
         sid = mail.get("student_id")
         name = mail.get("name")
         if not sid:
-            继续
+            continue
 
-        # 规则
+        # 审核规则
         if sid in black_ids:
             reject.append([sid, name, "黑名单"])
-            继续
+            continue
         if sid in last_ids:
             reject.append([sid, name, "去年已参加"])
-            继续
+            continue
         if sid not in xhj_ids:
-            reject.append([sid, name, "非新鸿基"])
-            继续
+            reject.append([sid, name, "非新鸿基学生"])
+            continue
 
-        # 附件检查
+        # 检查附件
         doc_path = mail.get("attachment_path")
-        如果 未提供文档路径：
-            拒绝.追加([, name, "无申请表"])
+        if not doc_path:
+            reject.append([sid, name, "未上传申请表"])
             continue
 
         # 解析Word
-        解析器 = DocxParser(doc_path)
-是否为补贴 =解析器.是否为补贴()
+        parser = DocxParser(doc_path)
+        is_subsidy = parser.is_subsidy()
         word_count = parser.count_reason()
-        logging.info(f"{sid} 字数：{word_count}")
+        logging.info(f"{sid} 理由字数：{word_count}")
 
         if not is_subsidy:
-            拒绝.追加([sid,  "非资助对象"])
+            reject.append([sid, name, "非资助对象"])
             continue
-        如果词数 <config.REASON_MIN_WORDS:
-            拒绝.追加([name“字数不足{config.REASON_MIN_WORDS}”])
-            继续
+        if word_count < config.REASON_MIN_WORDS:
+            reject.append([sid, name, f"理由字数不足{config.REASON_MIN_WORDS}"])
+            continue
 
-        接受.追加([sid, name, “通过”])
+        accept.append([sid, name, "审核通过"])
 
-    # 录取25人
-    接受 = 接受[:.MAX_ACCEPT]
-    excel.写入接受(接受)
-    excel.写入拒绝(拒绝)
+    # 最多录取25人
+    accept = accept[:config.MAX_ACCEPT]
+    
+    # 输出Excel
+    excel.write_accept(accept)
+    excel.write_reject(reject)
 
-    logging.info(f"\n🎯 录取：{len(accept)}人")
+    logging.info(f"\n🎯 最终录取：{len(accept)}人")
     logging.info("✅ 录取名单.xlsx 已生成")
     logging.info("✅ 拒绝名单.xlsx 已生成")
 
-如果__name__ =="__main__":
-    主程序()
+if __name__ == "__main__":
+    main()
