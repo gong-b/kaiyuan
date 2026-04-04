@@ -12,8 +12,9 @@ def main():
     def get_ids(path):
         try:
             df = pd.read_excel(path, dtype=str)
-            return set(df.iloc[:,0].dropna().str.strip())
-        except:
+            return set(df.iloc[:, 0].dropna().str.strip())
+        except Exception as e:
+            print(f"⚠️ 读取名单 {path} 失败: {e}")
             return set()
 
     xhj_ids = get_ids("新鸿基名单.xlsx")
@@ -24,86 +25,83 @@ def main():
     mails = client.fetch_mails()
     logging.info(f"📩 共收取邮件：{len(mails)}封")
 
-    accept = []
-    reject = []
+    accept_list = []
+    reject_list = []
 
     for mail in mails:
         sid = mail.get("student_id", "")
         name = mail.get("name", "")
-        rcv_time = mail.get("receive_time", "")
-        path = mail.get("attachment_path", "")
+        receive_time = mail.get("receive_time", "")
+        attach_path = mail.get("attachment_path", "")
 
         grade = "未知"
-        cls = "未知班级"
-        sub = False
-        cnt = 0
-        reason = ""
-        ok = False
+        apply_class = "未知班级"
+        is_subsidy = False
+        reason_count = 0
+        reject_reason = ""
+        parse_success = False
 
-        if path:
+        if attach_path:
             try:
-                p = DocxParser(path)
-                grade = p.get_grade()
-                cls = p.get_apply_class()
-                sub = p.get_subsidy()
-                cnt = p.get_reason_count()
-                ok = True
-            except:
-                reason = "解析失败"
+                parser = DocxParser(attach_path)
+                grade = parser.get_grade()
+                apply_class = parser.get_apply_class()
+                is_subsidy = parser.get_subsidy()
+                reason_count = parser.get_reason_count()
+                parse_success = True
+            except Exception as e:
+                reject_reason = "文件解析失败"
+                print(f"⚠️ {sid} {name} 解析失败: {e}")
 
-        # 筛选规则
+        # 审核规则
         if sid in black_ids:
-            reason = "黑名单"
+            reject_reason = "黑名单"
         elif sid in last_ids:
-            reason = "本年已参加"
+            reject_reason = "本年已参加"
         elif sid in xhj_ids:
-            reason = ""
-        elif not path:
-            reason = "无附件"
-        elif not ok:
-            reason = "解析失败"
+            reject_reason = ""
+        elif not attach_path:
+            reject_reason = "无Word附件"
+        elif not parse_success:
+            reject_reason = "文件解析失败"
         else:
-            if not sub:
-                reason = "非资助对象"
-            elif cnt < 100:
-                reason = f"字数不足({cnt}/100)"
+            if not is_subsidy:
+                reject_reason = "非资助对象"
+            elif reason_count < 100:
+                reject_reason = f"理由字数不足({reason_count}/100)"
+            else:
+                reject_reason = ""
 
-        row = [sid, name, grade, cnt, "是" if sub else "否", cls]
+        # 组装数据
+        base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class, receive_time]
 
-        if reason:
-            reject.append([*row, reason, rcv_time])
+        if reject_reason:
+            reject_list.append([*base_row, reject_reason])
         else:
-            accept.append([*row, rcv_time])
+            accept_list.append(base_row)
 
-    # 按时间排序
-    accept.sort(key=lambda x: x[-1])
-    reject.sort(key=lambda x: x[-1])
+    # ==============================================
+    # 🔥 关键：先按班级排序 → 再按时间排序
+    # ==============================================
+    accept_list.sort(key=lambda x: (x[5], x[6]))  # 班级、时间
+    reject_list.sort(key=lambda x: (x[5], x[6]))
 
-    acc = [r[:-1] for r in accept]
-    rej = [r[:-1] for r in reject]
+    # 去掉时间字段
+    accept_final = [[x[0],x[1],x[2],x[3],x[4],x[5]] for x in accept_list]
+    reject_final = [[x[0],x[1],x[2],x[3],x[4],x[5],x[7]] for x in reject_list]
 
-    cols_acc = ["学号","姓名","年级","申请理由字数","是否资助","报名班级"]
-    cols_rej = ["学号","姓名","年级","申请理由字数","是否资助","报名班级","拒绝原因"]
+    # 表头
+    accept_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级"]
+    reject_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级", "拒绝原因"]
 
-    # 导出总表
-    pd.DataFrame(acc, columns=cols_acc).to_excel("录取名单.xlsx", index=False)
-    pd.DataFrame(rej, columns=cols_rej).to_excel("拒绝名单.xlsx", index=False)
+    # ==============================
+    # 导出一个Excel，但班级已归类在一起
+    # ==============================
+    pd.DataFrame(accept_final, columns=accept_cols).to_excel("录取名单.xlsx", index=False)
+    pd.DataFrame(reject_final, columns=reject_cols).to_excel("拒绝名单.xlsx", index=False)
 
-    # ==========================================
-    # 🔥 关键：按班级 100% 分开导出
-    # ==========================================
-    if acc:
-        df_acc = pd.DataFrame(acc, columns=cols_acc)
-        for c, g in df_acc.groupby("报名班级"):
-            g.to_excel(f"录取_{c}.xlsx", index=False)
-
-    if rej:
-        df_rej = pd.DataFrame(rej, columns=cols_rej)
-        for c, g in df_rej.groupby("报名班级"):
-            g.to_excel(f"拒绝_{c}.xlsx", index=False)
-
-    logging.info(f"🎯 录取：{len(acc)} 人")
-    logging.info(f"❌ 拒绝：{len(rej)} 人")
+    logging.info(f"🎯 最终录取：{len(accept_final)} 人")
+    logging.info(f"❌ 最终拒绝：{len(reject_final)} 人")
 
 if __name__ == "__main__":
     main()
