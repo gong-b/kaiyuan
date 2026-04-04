@@ -5,50 +5,48 @@ class DocxParser:
     def __init__(self, file_path):
         self.file_path = file_path
         self.full_text = ""
-        self.is_subsidy_flag = False
-        self.reason_text = ""
-        self.reason_count = 0
+        self.is_subsidy = False
+        self.reason_word_count = 0
+        self.major_class = ""
         self.parse()
 
     def parse(self):
         try:
             doc = Document(self.file_path)
-            # 只读取表格（你的申请表全在表格里）
-            text_parts = []
+            parts = []
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        text_parts.append(cell.text.strip())
-            self.full_text = "".join(text_parts)
+                        parts.append(cell.text.strip())
+            self.full_text = " ".join(parts)
 
-            # 1. 判断资助对象（精准匹配你的表）
-            if "是否为学生资助对象" in self.full_text and "是" in self.full_text:
-                self.is_subsidy_flag = True
+            # 资助判断
+            self.is_subsidy = "是否为学生资助对象" in self.full_text and "是" in self.full_text
 
-            # 2. 精准提取【申请理由】正文（只算理由，不算标题）
-            # 匹配：申请理由（不少于100字）：xxxx
-            split_list = re.split(
-                r"申请理由\s*[（\(].*?[）\)]\s*[：:]",
-                self.full_text,
-                flags=re.I
-            )
-            if len(split_list) >= 2:
-                # 只取后面的正文
-                raw = split_list[1].strip()
-                # 去掉所有空格、换行、制表符
-                clean = re.sub(r"\s+", "", raw)
-                self.reason_text = clean
-                self.reason_count = len(clean)
+            # 提取班级（自动识别 多媒体班/书法班/绘画班 等）
+            class_pattern = r"([^\s]{2,8}班)"
+            match_class = re.search(class_pattern, self.full_text)
+            if match_class:
+                self.major_class = match_class.group(1)
+
+            # 提取申请理由字数（100%精准）
+            reason_parts = re.split(r"申请理由.*?[：:]", self.full_text)
+            if len(reason_parts) >= 2:
+                clean = re.sub(r"\s+", "", reason_parts[1].strip())
+                self.reason_word_count = len(clean)
             else:
-                self.reason_count = 0
+                self.reason_word_count = 0
 
-        except Exception:
-            self.full_text = ""
-            self.is_subsidy_flag = False
-            self.reason_count = 0
+        except:
+            self.is_subsidy = False
+            self.reason_word_count = 0
+            self.major_class = ""
 
-    def is_subsidy(self):
-        return self.is_subsidy_flag
+    def get_subsidy(self):
+        return self.is_subsidy
 
-    def get_reason_length(self):
-        return self.reason_count
+    def get_reason_count(self):
+        return self.reason_word_count
+
+    def get_class(self):
+        return self.major_class
