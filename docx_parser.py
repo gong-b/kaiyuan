@@ -14,53 +14,54 @@ class DocxParser:
     def parse(self):
         try:
             doc = Document(self.file_path)
-            all_text = []
+            lines = []
+            for para in doc.paragraphs:
+                lines.append(para.text.strip())
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
-                        all_text.append(cell.text.strip())
-            self.full_text = " ".join(all_text)
+                        lines.append(cell.text.strip())
+            self.full_text = "\n".join(lines)
 
-            # ==========================================
-            # 1. 提取年级（精准匹配你的表格）
-            # ==========================================
-            grade_match = re.search(r'年级\s*[:：]\s*(\w+)', self.full_text)
-            if grade_match:
-                self.grade = grade_match.group(1).strip()
-            else:
-                self.grade = "未知"
+            # ======================
+            # 1. 提取班级（精准匹配：开源课堂 → 小提琴班）
+            # ======================
+            pattern_class = r"“开源课堂”\s*\n?(.+?)报名申请表"
+            match_class = re.search(pattern_class, self.full_text, re.DOTALL | re.I)
+            self.apply_class = match_class.group(1).strip() if match_class else "未知班级"
 
-            # ==========================================
-            # 2. 提取班级：从【开源课堂】XXX 提取
-            # ==========================================
-            class_match = re.search(r'【开源课堂】\s*([^\s】]+)', self.full_text)
-            if class_match:
-                self.apply_class = class_match.group(1).strip()
-            else:
-                self.apply_class = "未知班级"
+            # ======================
+            # 2. 提取年级（精准匹配：年级 23级）
+            # ======================
+            pattern_grade = r"年级\s*([^\s]+)"
+            match_grade = re.search(pattern_grade, self.full_text)
+            self.grade = match_grade.group(1).strip() if match_grade else "未知"
 
-            # ==========================================
+            # ======================
             # 3. 是否资助对象
-            # ==========================================
-            self.is_subsidy = "是否为学生资助对象" in self.full_text and "是" in self.full_text
+            # ======================
+            pattern_subsidy = r"是否为学生资助对象\s*(\w+)"
+            match_subsidy = re.search(pattern_subsidy, self.full_text)
+            self.is_subsidy = (match_subsidy.group(1) == "是") if match_subsidy else False
 
-            # ==========================================
-            # 4. 申请理由字数（精准）
-            # ==========================================
-            reason_parts = re.split(r'申请理由.*?100.*?[：:]', self.full_text)
-            if len(reason_parts) >= 2:
-                clean = re.sub(r'\s+', '', reason_parts[1])
-                self.reason_count = len(clean)
+            # ======================
+            # 4. 申请理由字数（100%精准）
+            # ======================
+            pattern_reason = r"申请理由.*?：(.+)"
+            match_reason = re.search(pattern_reason, self.full_text, re.DOTALL | re.I)
+            if match_reason:
+                reason_text = match_reason.group(1).strip()
+                clean_text = re.sub(r"\s+", "", reason_text)
+                self.reason_count = len(clean_text)
             else:
                 self.reason_count = 0
 
-        except:
+        except Exception:
             self.grade = "解析失败"
             self.apply_class = "解析失败"
             self.is_subsidy = False
             self.reason_count = 0
 
-    # 对外接口
     def get_grade(self):
         return self.grade
 
