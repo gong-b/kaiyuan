@@ -3,7 +3,7 @@ import email
 from email.header import decode_header
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class EmailClient:
     def __init__(self):
@@ -49,34 +49,45 @@ class EmailClient:
                     return path
         return ""
 
-    # ==================== 中文日期格式化（完美适配浙大）====================
+    # 日期格式转换（浙大IMAP标准格式）
     def to_imap_date(self, date_str):
         dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return dt.strftime("%d-%b-%Y")  # 内部自动转成服务器能识别的格式
+        return dt.strftime("%d-%b-%Y")
 
-    # ==================== 收取邮件（中文日期显示 + 无错版）====================
     def fetch_mails(self):
         mails = []
         if not self.connect():
             return mails
 
         try:
-            # 中文日期传给服务器（内部自动转换）
-            s_date = self.to_imap_date(self.start_date)
-            e_date = self.to_imap_date(self.end_date)
+            # 1. 解析网页传入的日期
+            start_dt = datetime.strptime(self.start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
 
-            # 中文日志输出（你要的效果）
+            # 2. 日志显示（你要的中文日期格式）
             print(f"✅ 开始筛选邮件：{self.start_date} 至 {self.end_date}")
 
-            # 浙大邮箱官方支持的搜索命令
-            status, messages = self.conn.search(None, f'SINCE "{s_date}" BEFORE "{e_date}"')
-            mail_ids = messages[0].split()
+            # 3. 修复IMAP搜索逻辑：BEFORE 要+1天，才能包含结束日期当天！
+            # 比如结束日期是10-10，BEFORE要设为10-11，才能搜到10-10当天的邮件
+            search_start = self.to_imap_date(self.start_date)
+            search_end = self.to_imap_date((end_dt + timedelta(days=1)).strftime("%Y-%m-%d"))
 
+            # 4. 正确的IMAP搜索命令
+            status, messages = self.conn.search(None, f'SINCE "{search_start}" BEFORE "{search_end}"')
+            
+            if status != "OK":
+                print(f"⚠️ 邮件搜索失败: {status}")
+                return []
+
+            mail_ids = messages[0].split()
             print(f"✅ 共找到邮件：{len(mail_ids)} 封")
 
+            # 5. 遍历邮件（从最新到最旧）
             for mail_id in reversed(mail_ids):
                 try:
                     res, data = self.conn.fetch(mail_id, "(RFC822)")
+                    if res != "OK":
+                        continue
                     for part in data:
                         if isinstance(part, tuple):
                             msg = email.message_from_bytes(part[1])
@@ -92,11 +103,12 @@ class EmailClient:
                                 "attachment_path": attach
                             })
                 except Exception as e:
+                    print(f"⚠️ 跳过一封异常邮件: {e}")
                     continue
 
             self.conn.close()
             self.conn.logout()
         except Exception as ex:
-            print(f"错误：{ex}")
+            print(f"❌ 邮件获取错误: {ex}")
 
         return mails
