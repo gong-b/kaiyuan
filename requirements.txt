@@ -1,9 +1,4 @@
 streamlit
-pandas
-openpyxl
-python-docx
-pdfkit
-wkhtmltopdf
-python-docx
-pywin32; platform_system=="Windows"
-textract
+python-docx==1.1.2
+pandas==2.2.2
+openpyxl==3.1.5
