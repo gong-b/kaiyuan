@@ -4,3 +4,6 @@ openpyxl
 python-docx
 pdfkit
 wkhtmltopdf
+python-docx
+pywin32; platform_system=="Windows"
+textract
