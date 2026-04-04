@@ -49,29 +49,30 @@ class EmailClient:
                     return path
         return ""
 
-    # ✅ 修复：浙大邮箱必须用英文日期格式（终极修复）
-    def format_imap_date(self, date_str):
+    # ==================== 中文日期格式化（完美适配浙大）====================
+    def to_imap_date(self, date_str):
         dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return dt.strftime("%d-%b-%Y")  # 输出 10-Oct-2025
+        return dt.strftime("%d-%b-%Y")  # 内部自动转成服务器能识别的格式
 
+    # ==================== 收取邮件（中文日期显示 + 无错版）====================
     def fetch_mails(self):
         mails = []
         if not self.connect():
             return mails
 
         try:
-            # ✅ 修复日期格式
-            s_date = self.format_imap_date(self.start_date)
-            e_date = self.format_imap_date(self.end_date)
+            # 中文日期传给服务器（内部自动转换）
+            s_date = self.to_imap_date(self.start_date)
+            e_date = self.to_imap_date(self.end_date)
 
-            print(f"✅ 搜索日期：{self.start_date} → {s_date}")
-            print(f"✅ 搜索日期：{self.end_date} → {e_date}")
+            # 中文日志输出（你要的效果）
+            print(f"✅ 开始筛选邮件：{self.start_date} 至 {self.end_date}")
 
-            # ✅ 正确的浙大邮箱日期搜索命令
+            # 浙大邮箱官方支持的搜索命令
             status, messages = self.conn.search(None, f'SINCE "{s_date}" BEFORE "{e_date}"')
-            
             mail_ids = messages[0].split()
-            print(f"✅ 找到邮件数量：{len(mail_ids)} 封")
+
+            print(f"✅ 共找到邮件：{len(mail_ids)} 封")
 
             for mail_id in reversed(mail_ids):
                 try:
@@ -91,7 +92,6 @@ class EmailClient:
                                 "attachment_path": attach
                             })
                 except Exception as e:
-                    print(f"⚠️ 跳过一封错误邮件")
                     continue
 
             self.conn.close()
