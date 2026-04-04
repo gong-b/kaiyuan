@@ -37,19 +37,39 @@ class EmailClient:
         name = re.search(r"([\u4e00-\u9fa5]{2,4})", subject)
         return (sid.group(1) if sid else "", name.group(1) if name else "")
 
+    # ✅ 修复：支持.doc和.docx，兼容所有文件名
     def save_attachment(self, msg, sid):
-        for part in msg.walk():
-            if part.get_content_disposition() == "attachment":
-                fn = part.get_filename()
-                if fn and fn.endswith(".docx"):
-                    os.makedirs("data", exist_ok=True)
-                    path = f"data/{sid}_{fn}"
-                    with open(path, "wb") as f:
-                        f.write(part.get_payload(decode=True))
-                    return path
+        if not msg:
+            return ""
+        
+        try:
+            for part in msg.walk():
+                if part.get_content_disposition() == "attachment":
+                    filename = part.get_filename()
+                    if not filename:
+                        continue
+                    
+                    # 解码文件名（解决中文/特殊字符乱码）
+                    filename, encoding = decode_header(filename)[0]
+                    if isinstance(filename, bytes):
+                        filename = filename.decode(encoding or "utf-8")
+                    
+                    # ✅ 同时支持.doc和.docx两种Word格式
+                    if filename.lower().endswith((".docx", ".doc")):
+                        os.makedirs("data", exist_ok=True)
+                        # 用学号+原文件名保存，避免重名
+                        safe_filename = f"{sid}_{filename}"
+                        path = os.path.join("data", safe_filename)
+                        
+                        with open(path, "wb") as f:
+                            f.write(part.get_payload(decode=True))
+                        
+                        print(f"✅ 成功保存附件：{filename}")
+                        return path
+        except Exception as e:
+            print(f"⚠️ 保存附件失败: {e}")
         return ""
 
-    # 日期格式转换（浙大IMAP标准格式）
     def to_imap_date(self, date_str):
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         return dt.strftime("%d-%b-%Y")
@@ -60,19 +80,14 @@ class EmailClient:
             return mails
 
         try:
-            # 1. 解析网页传入的日期
             start_dt = datetime.strptime(self.start_date, "%Y-%m-%d")
             end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
 
-            # 2. 日志显示（你要的中文日期格式）
             print(f"✅ 开始筛选邮件：{self.start_date} 至 {self.end_date}")
 
-            # 3. 修复IMAP搜索逻辑：BEFORE 要+1天，才能包含结束日期当天！
-            # 比如结束日期是10-10，BEFORE要设为10-11，才能搜到10-10当天的邮件
             search_start = self.to_imap_date(self.start_date)
             search_end = self.to_imap_date((end_dt + timedelta(days=1)).strftime("%Y-%m-%d"))
 
-            # 4. 正确的IMAP搜索命令
             status, messages = self.conn.search(None, f'SINCE "{search_start}" BEFORE "{search_end}"')
             
             if status != "OK":
@@ -82,7 +97,6 @@ class EmailClient:
             mail_ids = messages[0].split()
             print(f"✅ 共找到邮件：{len(mail_ids)} 封")
 
-            # 5. 遍历邮件（从最新到最旧）
             for mail_id in reversed(mail_ids):
                 try:
                     res, data = self.conn.fetch(mail_id, "(RFC822)")
