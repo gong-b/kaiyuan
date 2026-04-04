@@ -49,8 +49,10 @@ class EmailClient:
                     return path
         return ""
 
-    def format_date(self, d):
-        return datetime.strptime(d, "%Y-%m-%d").strftime("%d-%b-%Y")
+    # ✅ 修复：浙大邮箱必须用英文日期格式（终极修复）
+    def format_imap_date(self, date_str):
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.strftime("%d-%b-%Y")  # 输出 10-Oct-2025
 
     def fetch_mails(self):
         mails = []
@@ -58,12 +60,18 @@ class EmailClient:
             return mails
 
         try:
-            s = self.format_date(self.start_date)
-            e = self.format_date(self.end_date)
-            criterion = f'(SINCE "{s}" BEFORE "{e}")'
-            status, messages = self.conn.search(None, criterion)
+            # ✅ 修复日期格式
+            s_date = self.format_imap_date(self.start_date)
+            e_date = self.format_imap_date(self.end_date)
+
+            print(f"✅ 搜索日期：{self.start_date} → {s_date}")
+            print(f"✅ 搜索日期：{self.end_date} → {e_date}")
+
+            # ✅ 正确的浙大邮箱日期搜索命令
+            status, messages = self.conn.search(None, f'SINCE "{s_date}" BEFORE "{e_date}"')
+            
             mail_ids = messages[0].split()
-            print(f"✅ 筛选 {self.start_date} ~ {self.end_date} 邮件，共找到：{len(mail_ids)} 封")
+            print(f"✅ 找到邮件数量：{len(mail_ids)} 封")
 
             for mail_id in reversed(mail_ids):
                 try:
@@ -82,10 +90,13 @@ class EmailClient:
                                 "subject": subject,
                                 "attachment_path": attach
                             })
-                except:
+                except Exception as e:
+                    print(f"⚠️ 跳过一封错误邮件")
                     continue
+
             self.conn.close()
             self.conn.logout()
         except Exception as ex:
             print(f"错误：{ex}")
+
         return mails
