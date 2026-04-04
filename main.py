@@ -16,8 +16,8 @@ def main():
     black_ids = excel.read_student_ids("黑名单.xlsx")
     last_ids = excel.read_student_ids("去年名单.xlsx")
 
-    # 收邮件
-    client = EmailClient(config.EMAIL_HOST, config.EMAIL_PORT, config.EMAIL_USER, config.EMAIL_PASS)
+    # 收邮件（修复：不传参数！）
+    client = EmailClient()
     mails = client.fetch_mails()
     logging.info(f"📩 共收取邮件：{len(mails)}封")
 
