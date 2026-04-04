@@ -7,14 +7,15 @@ import pandas as pd
 st.set_page_config(page_title="书法班报名筛选系统", page_icon="🎓", layout="wide")
 st.title("🎓 浙江大学书法班报名自动筛选系统")
 
-# 邮箱登录（你要的功能）
+# 邮箱登录
 st.subheader("📩 邮箱登录")
 email_user = st.text_input("浙大邮箱", placeholder="xxx@zju.edu.cn")
 email_pass = st.text_input("客户端专用密码", type="password")
 
-# 上传名单
+# 上传名单（恢复黑名单）
 st.subheader("📂 上传名单文件")
 file_xhj = st.file_uploader("新鸿基学生名单", type=["xlsx"])
+file_black = st.file_uploader("黑名单", type=["xlsx"])
 file_last = st.file_uploader("去年已参加名单", type=["xlsx"])
 
 # 运行按钮
@@ -22,17 +23,19 @@ if st.button("▶️ 开始自动筛选"):
     if not email_user or not email_pass:
         st.warning("请输入邮箱和客户端专用密码！")
         st.stop()
-    if not file_xhj or not file_last:
-        st.warning("请上传全部名单！")
+    if not file_xhj or not file_black or not file_last:
+        st.warning("请上传全部3个名单！")
         st.stop()
 
     # 保存上传文件
     with open("新鸿基名单.xlsx", "wb") as f:
         f.write(file_xhj.getbuffer())
+    with open("黑名单.xlsx", "wb") as f:
+        f.write(file_black.getbuffer())
     with open("去年名单.xlsx", "wb") as f:
         f.write(file_last.getbuffer())
 
-    # 把邮箱密码传给主程序
+    # 邮箱密码传入环境变量
     os.environ["EMAIL_USER"] = email_user
     os.environ["EMAIL_PASS"] = email_pass
 
