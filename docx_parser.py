@@ -2,52 +2,31 @@ from docx import Document
 import re
 
 class DocxParser:
-    def __init__(self, file_path):
-        self.file_path = file_path
-        self.full_text = ""
-        self.is_subsidy_flag = False
-        self.reason_count = 0
+    def __init__(self, path):
+        self.path = path
+        self.ok = False
+        self.cnt = 0
         self.parse()
 
     def parse(self):
         try:
-            doc = Document(self.file_path)
-            lines = []
-
-            # 读取所有表格内容
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        txt = cell.text.strip()
-                        if txt:
-                            lines.append(txt)
-
-            self.full_text = "\n".join(lines)
-            self.check_subsidy()
-            self.extract_reason()
-
-        except Exception as e:
-            self.full_text = ""
-            self.is_subsidy_flag = False
-            self.reason_count = 0
-
-    def check_subsidy(self):
-        # 精准匹配你的申请表：是否为学生资助对象 → 是
-        if "是否为学生资助对象" in self.full_text and "是" in self.full_text:
-            self.is_subsidy_flag = True
-
-    def extract_reason(self):
-        # 精准提取“申请理由（不少于100字）：”后面的内容
-        match = re.split(r"申请理由.*不少于100字.*：", self.full_text)
-        if len(match) > 1:
-            reason = match[1].strip()
-            reason = re.sub(r"\s+", "", reason)
-            self.reason_count = len(reason)
-        else:
-            self.reason_count = 0
+            doc = Document(self.path)
+            txt = []
+            for t in doc.tables:
+                for r in t.rows:
+                    for c in r.cells:
+                        txt.append(c.text)
+            full = "".join(txt)
+            self.ok = "是否为学生资助对象" in full and "是" in full
+            m = re.split(r"申请理由.*100.*：", full)
+            if len(m) > 1:
+                self.cnt = len(re.sub(r"\s", "", m[1]))
+        except:
+            self.ok = False
+            self.cnt = 0
 
     def is_subsidy(self):
-        return self.is_subsidy_flag
+        return self.ok
 
     def get_reason_length(self):
-        return self.reason_count
+        return self.cnt
