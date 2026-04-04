@@ -1,74 +1,100 @@
 from docx import Document
 import re
+import os
+import subprocess
 
 class DocxParser:
     def __init__(self, file_path):
         self.file_path = file_path
         self.full_text = ""
-        self.is_subsidy = False
+        self.is_subsidy_flag = False
         self.real_reason = ""
         self.reason_count = 0
 
-        # 一次性解析完所有内容
-        self.parse_all()
+        self.parse_safely()
 
-    def parse_all(self):
+    def parse_safely(self):
         try:
-            doc = Document(self.file_path)
-            text_list = []
+            if not os.path.exists(self.file_path):
+                return
 
-            # 读取所有表格内容（你的申请表全在表格里）
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        cell_txt = cell.text.strip()
-                        text_list.append(cell_txt)
+            # ==========================================
+            # 🔥 核心：自动支持 .doc 和 .docx
+            # ==========================================
+            ext = self.file_path.lower().split('.')[-1]
 
-            # 合并所有文本
-            self.full_text = "\n".join(text_list)
+            if ext == "docx":
+                doc = Document(self.file_path)
+                text_list = []
+                for para in doc.paragraphs:
+                    t = para.text.strip()
+                    if t:
+                        text_list.append(t)
+                for table in doc.tables:
+                    for row in table.rows:
+                        for cell in row.cells:
+                            t = cell.text.strip()
+                            if t:
+                                text_list.append(t)
+                self.full_text = "\n".join(text_list)
 
-            # 1. 判断是否资助对象
+            elif ext == "doc":
+                # 旧版doc 文本提取（兼容Linux/Windows/Streamlit）
+                try:
+                    result = subprocess.run(
+                        ['catdoc', self.file_path],
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        errors='ignore'
+                    )
+                    self.full_text = result.stdout
+                except:
+                    self.full_text = ""
+
+            else:
+                self.full_text = ""
+
+            # 判断资助
             self.check_subsidy()
-
-            # 2. 提取真实申请理由（只提取理由正文）
+            # 提取理由
             self.extract_reason()
 
         except Exception as e:
             self.full_text = ""
-            self.is_subsidy = False
-            self.real_reason = ""
+            self.is_subsidy_flag = False
             self.reason_count = 0
 
     def check_subsidy(self):
-        # 匹配你的表格：是否为学生资助对象 | 是
-        if "是否为学生资助对象" in self.full_text:
-            # 后面跟着“是”才判定为资助对象
-            self.is_subsidy = "是" in self.full_text
+        text = self.full_text
+        if "是否为学生资助对象" in text and "是" in text:
+            self.is_subsidy_flag = True
+        elif "是" in text and any(k in text for k in ["资助", "困难", "贫困", "助学金"]):
+            self.is_subsidy_flag = True
+        else:
+            self.is_subsidy_flag = False
 
     def extract_reason(self):
-        # 按你的表格结构：从“申请理由（不少于100字）”后面开始提取正文
-        reason_split = re.split(
+        text = self.full_text
+        patterns = [
             r"申请理由\s*[（\(]\s*不少于\s*100\s*字\s*[）\)]\s*[：:]",
-            self.full_text,
-            flags=re.I
-        )
+            r"申请理由\s*[：:]",
+        ]
+        for p in patterns:
+            parts = re.split(p, text, flags=re.I)
+            if len(parts) >= 2:
+                reason = parts[1].strip()
+                reason = re.sub(r"\s+", " ", reason)
+                self.real_reason = reason
+                self.reason_count = len(reason)
+                return
 
-        if len(reason_split) >= 2:
-            reason = reason_split[1].strip()
+        clean = re.sub(r"\s+", "", text)
+        self.real_reason = clean
+        self.reason_count = len(clean)
 
-            # 去掉多余空行、空格、换行
-            reason = re.sub(r"\s+", " ", reason)
-            reason = reason.strip()
-
-            self.real_reason = reason
-            self.reason_count = len(reason)
-        else:
-            self.real_reason = ""
-            self.reason_count = 0
-
-    # 给外部调用的接口
     def is_subsidy(self):
-        return self.is_subsidy
+        return self.is_subsidy_flag
 
     def get_reason_length(self):
         return self.reason_count
