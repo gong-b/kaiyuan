@@ -3,6 +3,7 @@ import os
 from email_client import EmailClient
 from docx_parser import DocxParser
 import pandas as pd
+from email.utils import parsedate_to_datetime  # 时间解析修复
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -27,7 +28,7 @@ def main():
 
     accept_list = []
     reject_list = []
-    processed_students = set()  # 去重：一人限录一个班
+    processed_students = set()
 
     for mail in mails:
         sid = mail.get("student_id", "")
@@ -41,6 +42,13 @@ def main():
         reason_count = 0
         reject_reason = ""
         parse_success = False
+        real_datetime = None
+
+        # 时间标准化（修复排序错乱）
+        try:
+            real_datetime = parsedate_to_datetime(receive_time)
+        except:
+            real_datetime = None
 
         if attach_path:
             try:
@@ -53,7 +61,6 @@ def main():
             except Exception as e:
                 reject_reason = "文件解析失败"
 
-        # 审核规则
         if sid in black_ids:
             reject_reason = "黑名单"
         elif sid in last_ids:
@@ -72,37 +79,31 @@ def main():
             else:
                 reject_reason = ""
 
-        # 一人多报：只录取最先报名的
         if not reject_reason:
             if sid in processed_students:
                 reject_reason = "重复报名，仅录取最先报名的班级"
             else:
                 processed_students.add(sid)
 
-        base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class, receive_time]
+        base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class, real_datetime]
 
         if reject_reason:
             reject_list.append([*base_row, reject_reason])
         else:
             accept_list.append(base_row)
 
-    # ==============================================
-    # 🔥 最终正确排序：
-    # 1. 先按 班级 排序
-    # 2. 班级内 按 报名时间 从早到晚排序
-    # ==============================================
-    accept_list.sort(key=lambda x: (x[5], x[6]))
-    reject_list.sort(key=lambda x: (x[5], x[6]))
+    # ===========================================
+    # 🔥 终极修复：先按班级 → 再按真实时间正序
+    # ===========================================
+    accept_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
+    reject_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
 
-    # 去掉时间字段
-    accept_final = [[x[0],x[1],x[2],x[3],x[4],x[5]] for x in accept_list]
-    reject_final = [[x[0],x[1],x[2],x[3],x[4],x[5],x[7]] for x in reject_list]
+    accept_final = [[x[0], x[1], x[2], x[3], x[4], x[5]] for x in accept_list]
+    reject_final = [[x[0], x[1], x[2], x[3], x[4], x[5], x[7]] for x in reject_list]
 
-    # 列表头
     accept_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级"]
     reject_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级", "拒绝原因"]
 
-    # 导出总表（班级已分组，班内按时间排序）
     pd.DataFrame(accept_final, columns=accept_cols).to_excel("录取名单.xlsx", index=False)
     pd.DataFrame(reject_final, columns=reject_cols).to_excel("拒绝名单.xlsx", index=False)
 
