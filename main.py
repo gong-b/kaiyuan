@@ -27,6 +27,7 @@ def main():
 
     accept_list = []
     reject_list = []
+    processed_students = set()  # 记录已经录取的学生学号
 
     for mail in mails:
         sid = mail.get("student_id", "")
@@ -72,33 +73,51 @@ def main():
             else:
                 reject_reason = ""
 
+        # ======================
+        # 🔥 核心：一人多报处理 - 只录取最先报名的
+        # ======================
+        if not reject_reason:
+            if sid in processed_students:
+                reject_reason = "重复报名，仅保留最先报名的班级"
+            else:
+                processed_students.add(sid)
+
         # 组装数据
-        base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class, receive_time]
+        base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class]
 
         if reject_reason:
-            reject_list.append([*base_row, reject_reason])
+            reject_list.append([*base_row, reject_reason, receive_time])
         else:
-            accept_list.append(base_row)
+            accept_list.append([*base_row, receive_time])
 
-    # ==============================================
-    # 🔥 关键：先按班级排序 → 再按时间排序
-    # ==============================================
-    accept_list.sort(key=lambda x: (x[5], x[6]))  # 班级、时间
-    reject_list.sort(key=lambda x: (x[5], x[6]))
+    # ======================
+    # 🔥 核心：日期正序排序（最早报名 → 排在最前）
+    # ======================
+    accept_list.sort(key=lambda x: x[-1])  # 时间正序
+    reject_list.sort(key=lambda x: x[-1])
 
     # 去掉时间字段
-    accept_final = [[x[0],x[1],x[2],x[3],x[4],x[5]] for x in accept_list]
-    reject_final = [[x[0],x[1],x[2],x[3],x[4],x[5],x[7]] for x in reject_list]
+    accept_final = [row[:-1] for row in accept_list]
+    reject_final = [row[:-1] for row in reject_list]
 
     # 表头
     accept_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级"]
     reject_cols = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级", "拒绝原因"]
 
-    # ==============================
-    # 导出一个Excel，但班级已归类在一起
-    # ==============================
+    # 导出总表
     pd.DataFrame(accept_final, columns=accept_cols).to_excel("录取名单.xlsx", index=False)
     pd.DataFrame(reject_final, columns=reject_cols).to_excel("拒绝名单.xlsx", index=False)
+
+    # 按班级分类导出（同一个班级在一起）
+    if accept_final:
+        accept_df = pd.DataFrame(accept_final, columns=accept_cols)
+        for cls_name, group in accept_df.groupby("报名班级"):
+            group.to_excel(f"录取_{cls_name}.xlsx", index=False)
+
+    if reject_final:
+        reject_df = pd.DataFrame(reject_final, columns=reject_cols)
+        for cls_name, group in reject_df.groupby("报名班级"):
+            group.to_excel(f"拒绝_{cls_name}.xlsx", index=False)
 
     logging.info(f"🎯 最终录取：{len(accept_final)} 人")
     logging.info(f"❌ 最终拒绝：{len(reject_final)} 人")
