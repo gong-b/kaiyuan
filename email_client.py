@@ -23,13 +23,13 @@ class EmailClient:
         except:
             return None
 
-    def dec(self, s):
+    def decode_str(self, s):
         try:
             return "".join(t.decode(c or "utf-8") if isinstance(t, bytes) else str(t) for t, c in decode_header(s))
         except:
             return str(s)
 
-    def save(self, msg, sid):
+    def save_attach(self, msg, sid):
         for part in msg.walk():
             if part.get_content_disposition() == "attachment":
                 fn = part.get_filename()
@@ -54,17 +54,23 @@ class EmailClient:
             e = (datetime.strptime(self.ed, "%Y-%m-%d") + timedelta(1)).strftime("%d-%b-%Y")
             _, ids = c.search(None, f'SINCE "{s}" BEFORE "{e}"')
             for mid in reversed(ids[0].split()):
-                _, data = c.fetch(mid, "(RFC822)")
-                msg = email.message_from_bytes(data[0][1])
-                subj = self.dec(msg["Subject"])
-                sid = re.search(r"\d{10}", subj)
-                name = re.search(r"[\u4e00-\u9fa5]{2,4}", subj)
-                if sid:
-                    mails.append({
-                        "student_id": sid.group(),
-                        "name": name.group() if name else "",
-                        "attachment_path": self.save(msg, sid.group())
-                    })
+                try:
+                    _, data = c.fetch(mid, "(RFC822)")
+                    msg = email.message_from_bytes(data[0][1])
+                    subj = self.decode_str(msg["Subject"])
+                    date_str = msg.get("Date", "")
+                    sid = re.search(r"\d{10}", subj)
+                    name = re.search(r"[\u4e00-\u9fa5]{2,4}", subj)
+                    if sid:
+                        attach = self.save_attach(msg, sid.group())
+                        mails.append({
+                            "student_id": sid.group(),
+                            "name": name.group() if name else "",
+                            "attachment_path": attach,
+                            "receive_time": date_str
+                        })
+                except:
+                    continue
         except:
             pass
         c.close()
