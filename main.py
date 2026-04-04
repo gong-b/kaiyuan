@@ -10,9 +10,10 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 def main():
     logging.info("✅ 开始筛选")
 
-    # 读取名单
+    # 读取三个名单
     excel = ExcelHandler()
     xhj_ids = excel.read_student_ids("新鸿基名单.xlsx")
+    black_ids = excel.read_student_ids("黑名单.xlsx")
     last_ids = excel.read_student_ids("去年名单.xlsx")
 
     # 收邮件
@@ -30,12 +31,16 @@ def main():
             reject.append(["未知", "未知", "主题格式错误"])
             continue
 
-        # 规则
+        # ========== 恢复黑名单判断 ==========
+        if sid in black_ids:
+            reject.append([sid, name, "黑名单"])
+            continue
+
         if sid in last_ids:
             reject.append([sid, name, "去年已参加"])
             continue
 
-        # 新鸿基直接进入候选
+        # 新鸿基进入候选
         if sid not in xhj_ids:
             reject.append([sid, name, "非新鸿基学生"])
             continue
