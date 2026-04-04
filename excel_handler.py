@@ -1,21 +1,15 @@
 import pandas as pd
-import config
 
 class ExcelHandler:
-    def read_student_ids(self, file_path):
+    def read_student_ids(self, path):
         try:
-            df = pd.read_excel(file_path)
-            for col in df.columns:
-                if "学号" in str(col):
-                    return [str(x).strip() for x in df[col] if pd.notna(x)]
+            df = pd.read_excel(path, dtype=str)
+            return set(df.iloc[:, 0].dropna().astype(str).str.strip())
         except:
-            return []
-        return []
+            return set()
 
     def write_accept(self, data):
-        df = pd.DataFrame(data, columns=["学号", "姓名", "状态"])
-        df.to_excel(config.ADMITTED_FILE, index=False)
+        pd.DataFrame(data, columns=["学号", "姓名", "状态"]).to_excel("录取名单.xlsx", index=False)
 
     def write_reject(self, data):
-        df = pd.DataFrame(data, columns=["学号", "姓名", "拒绝原因"])
-        df.to_excel(config.REJECTED_FILE, index=False)
+        pd.DataFrame(data, columns=["学号", "姓名", "原因"]).to_excel("拒绝名单.xlsx", index=False)
