@@ -1,163 +1,307 @@
-import streamlit as st
-import pandas as pd
-import os
-from email_client import EmailClient
-from docx_parser import DocxParser
-from email.utils import parsedate_to_datetime
-from io import BytesIO
-
-# 彻底关闭所有警告
 import logging
-logging.getLogger("streamlit").setLevel(logging.ERROR)
-logging.getLogger().setLevel(logging.CRITICAL)
-import warnings
-warnings.filterwarnings("ignore")
+import re
+import streamlit as st
+from datetime import datetime, timezone
+from email.header import decode_header
+from email.message import Message
+from email.utils import parsedate_to_datetime
+from config import *
+from email_client import SecureIMAPClient
+from email_processor import EmailProcessor
+from docx_parser import parse_docx
+from excel_handler import read_student_list, save_results
 
-# 页面配置（必须放在最开头）
-st.set_page_config(page_title="书法班报名筛选系统", layout="wide")
-st.title("🎓 书法班报名自动筛选系统")
-
-# 输入区域
-col1, col2 = st.columns(2)
-with col1:
-    email_account = st.text_input("浙大邮箱", placeholder="zzbgs@zju.edu.cn")
-    password = st.text_input("客户端专用密码", type="password")
-with col2:
-    start_date = st.text_input("开始日期 (格式：YYYY-MM-DD)", value="2025-10-02")
-    end_date = st.text_input("结束日期 (格式：YYYY-MM-DD)", value="2025-10-10")
-
-# 上传名单
-st.subheader("📂 上传名单")
-col3, col4, col5 = st.columns(3)
-with col3:
-    xhj_file = st.file_uploader("新鸿基名单", type="xlsx")
-with col4:
-    black_file = st.file_uploader("黑名单", type="xlsx")
-with col5:
-    last_file = st.file_uploader("去年已参加名单", type="xlsx")
-
-# 开始筛选按钮
-if st.button("✅ 开始筛选", type="primary", use_container_width=True):
-    # 校验输入
-    if not all([email_account, password, start_date, end_date, xhj_file, black_file, last_file]):
-        st.error("❌ 请填写完整信息并上传所有名单！")
-        st.stop()
-
-    # 内存读取名单，不写本地文件
-    def get_ids_from_memory(uploaded_file):
+# ==================== 日志配置 ====================
+class SafeLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord):
         try:
-            df = pd.read_excel(BytesIO(uploaded_file.getvalue()), dtype=str)
-            return set(df.iloc[:, 0].dropna().str.strip())
-        except Exception as e:
-            st.error(f"读取名单失败: {e}")
-            return set()
-
-    xhj_ids = get_ids_from_memory(xhj_file)
-    black_ids = get_ids_from_memory(black_file)
-    last_ids = get_ids_from_memory(last_file)
-
-    # 配置环境变量
-    os.environ["EMAIL_USER"] = email_account
-    os.environ["EMAIL_PASS"] = password
-    os.environ["START_DATE"] = start_date
-    os.environ["END_DATE"] = end_date
-
-    # 收取邮件
-    with st.spinner("📩 正在收取邮件..."):
-        client = EmailClient()
-        mails = client.fetch_mails()
-    st.success(f"✅ 共收取邮件：{len(mails)}封")
-
-    # 筛选逻辑（完全保留你的业务逻辑）
-    accept_list = []
-    reject_list = []
-    processed = set()
-
-    for mail in mails:
-        sid = mail.get("student_id", "")
-        name = mail.get("name", "")
-        rt = mail.get("receive_time", "")
-        attach_io = mail.get("attach_io")
-
-        g, c, is_sub, cnt, err = "未知", "未知", False, 0, ""
-
-        try:
-            t = parsedate_to_datetime(rt)
+            record.msg = str(record.msg).encode('utf-8', errors='replace').decode('utf-8')
         except:
-            t = None
+            pass
+        return True
 
-        # 内存解析附件
-        if attach_io:
-            try:
-                p = DocxParser(attach_io)
-                g = p.get_grade()
-                c = p.get_apply_class()
-                is_sub = p.get_subsidy()
-                cnt = p.get_reason_count()
-            except Exception as e:
-                err = "文件解析失败"
-        else:
-            err = "无Word附件"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(DATA_DIR / "processing.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
 
-        # 筛选规则
-        if sid in black_ids:
-            err = "黑名单"
-        elif sid in last_ids:
-            err = "本年已参加"
-        elif not err and not is_sub:
-            err = "非资助对象"
-        elif not err and cnt < 100:
-            err = f"字数不足({cnt})"
+logger = logging.getLogger(__name__)
+logger.addFilter(SafeLogFilter())
 
-        # 去重
-        if not err:
-            if sid in processed:
-                err = "重复报名"
+# ==================== 正则配置 ====================
+SUBJECT_PATTERN = re.compile(
+    r"^\s*"
+    r"([()（）\[\]【】\{\}｛｝])?"
+    r"([\u4e00-\u9fa5]{2,})"  # 姓名（至少2个中文字符）
+    r"\s*[+＋-]?\s*"
+    r"(\d{8,12})"  # 学号（8-12位数字）
+    r"\s*[+＋-]?\s*"
+    r"书法班报名申请"
+    r"([)）\]\】\}\｝])?"
+    r"\s*$",
+    re.UNICODE
+)
+
+# ==================== 核心函数 ====================
+def parse_subject_pattern(subject: str) -> tuple[str, str] | tuple[None, None]:
+    """解析邮件主题，提取姓名和学号"""
+    if not subject:
+        return None, None
+    clean_subject = re.sub(r"\s+", "", subject)
+    match = SUBJECT_PATTERN.search(clean_subject)
+    if match:
+        return match.group(2).strip(), match.group(3).strip()
+    return None, None
+
+def parse_subject(msg: Message) -> str:
+    """安全解码邮件主题"""
+    decoded_parts = []
+    try:
+        for part, charset in decode_header(msg.get("Subject", "")):
+            if isinstance(part, bytes):
+                # 优先尝试常见编码
+                for encoding in [charset, 'utf-8', 'gb18030', 'big5']:
+                    if not encoding:
+                        continue
+                    try:
+                        decoded_parts.append(part.decode(encoding))
+                        break
+                    except:
+                        continue
+                else:
+                    decoded_parts.append(part.decode('utf-8', errors='replace'))
             else:
-                processed.add(sid)
+                decoded_parts.append(str(part))
+    except Exception as e:
+        logger.warning(f"主题解码异常: {str(e)}")
+        decoded_parts.append("[解码失败]")
+    return "".join(decoded_parts)
 
-        row = [sid, name, g, cnt, "是" if is_sub else "否", c, t]
-        if err:
-            reject_list.append(row + [err])
-        else:
-            accept_list.append(row)
+def process_emails() -> tuple[list[dict], list[dict]]:
+    """处理邮件主逻辑"""
+    email_processor = EmailProcessor()
+    new_hongji = read_student_list(str(NEW_HONGJI_FILE))
+    last_year = read_student_list(str(LAST_YEAR_FILE))
+    
+    admitted = []
+    rejected = []
+    candidates = []
+    
+    try:
+        with SecureIMAPClient() as client:
+            # Streamlit 进度条
+            st.info("开始读取邮件...")
+            email_count = 0
+            progress_bar = st.progress(0)
+            
+            for uid, msg in client.fetch_emails():
+                email_count += 1
+                progress_bar.progress(email_count / 100)  # 简易进度
+                
+                # 解析邮件时间
+                try:
+                    date_str = msg.get("Date")
+                    recv_date = parsedate_to_datetime(date_str) if date_str else None
+                    if recv_date:
+                        recv_date = recv_date.astimezone(timezone.utc)
+                except Exception as e:
+                    logger.error(f"日期解析失败: {e}")
+                    rejected.append({
+                        "学号": "未知",
+                        "姓名": "未知",
+                        "原主题": parse_subject(msg),
+                        "原因": "邮件日期解析失败"
+                    })
+                    continue
+                
+                # 时间过滤（2025-03-01之后）
+                cutoff_date = datetime(2025, 3, 1, tzinfo=timezone.utc)
+                if recv_date and recv_date < cutoff_date:
+                    logger.warning(f"邮件{uid}时间不符合要求: {recv_date}")
+                    rejected.append({
+                        "学号": "未知",
+                        "姓名": "未知",
+                        "原主题": parse_subject(msg),
+                        "原因": f"邮件接收时间过早（{recv_date}）"
+                    })
+                    continue
+                
+                # 解析主题
+                subject = parse_subject(msg)
+                name, student_id = parse_subject_pattern(subject)
+                
+                if not student_id or not name:
+                    rejected.append({
+                        "学号": "未知",
+                        "姓名": "未知",
+                        "原主题": subject,
+                        "原因": "主题格式错误（示例：薛孜324011234书法班报名申请）"
+                    })
+                    continue
+                
+                # 新鸿基直接录取
+                if student_id in new_hongji:
+                    admitted.append({"学号": student_id, "姓名": name, "备注": "新鸿基"})
+                    email_processor.save_email_pdf(msg, student_id, name)
+                    continue
+                
+                # 去年已录取
+                if student_id in last_year:
+                    rejected.append({
+                        "学号": student_id,
+                        "姓名": name,
+                        "原因": "去年已录取"
+                    })
+                    continue
+                
+                # 保存附件
+                attachments = email_processor.save_attachments(msg, student_id, name)
+                docx_files = [a for a in attachments if a.suffix == ".docx"]
+                
+                if not docx_files:
+                    rejected.append({
+                        "学号": student_id,
+                        "姓名": name,
+                        "原因": "缺少DOCX格式申请附件"
+                    })
+                    continue
+                
+                # 解析DOCX
+                try:
+                    docx_info = parse_docx(str(docx_files[0]))
+                    if not docx_info["is_supported"]:
+                        rejected.append({
+                            "学号": student_id,
+                            "姓名": name,
+                            "原因": "非学生资助对象"
+                        })
+                    elif docx_info["reason_length"] < 95:
+                        rejected.append({
+                            "学号": student_id,
+                            "姓名": name,
+                            "原因": f"申请理由字数不足（仅{docx_info['reason_length']}字，需≥95字）"
+                        })
+                    else:
+                        candidates.append((student_id, name, recv_date))
+                except Exception as e:
+                    rejected.append({
+                        "学号": student_id,
+                        "姓名": name,
+                        "原因": f"附件解析失败: {str(e)[:50]}..."
+                    })
+        
+        # 处理候补名单
+        remaining = 25 - len(admitted)
+        if remaining > 0 and candidates:
+            # 按接收时间排序（早到早得）
+            candidates.sort(key=lambda x: x[2])
+            # 录取候补
+            for student_id, name, _ in candidates[:remaining]:
+                admitted.append({"学号": student_id, "姓名": name, "备注": "非新鸿基"})
+            # 拒绝剩余候补
+            for student_id, name, _ in candidates[remaining:]:
+                rejected.append({
+                    "学号": student_id,
+                    "姓名": name,
+                    "原因": "名额已满（候补未录取）"
+                })
+        
+        # 保存结果
+        save_results(admitted, rejected)
+        logger.info(f"处理完成 - 录取{len(admitted)}人，拒绝{len(rejected)}人")
+        
+        return admitted, rejected
+        
+    except Exception as e:
+        logger.error(f"处理过程异常: {str(e)}")
+        st.error(f"处理失败: {str(e)}")
+        return admitted, rejected
 
-    # 排序：先班级 → 再时间正序
-    accept_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
-    reject_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
+# ==================== Streamlit 页面 ====================
+def main():
+    """Streamlit主页面"""
+    # 页面配置
+    st.set_page_config(
+        page_title=STREAMLIT_PAGE_TITLE,
+        page_icon=STREAMLIT_PAGE_ICON,
+        layout="wide"
+    )
+    
+    # 侧边栏
+    with st.sidebar:
+        st.title("📝 书法班报名审核")
+        st.divider()
+        # 邮箱配置（Streamlit Secrets）
+        st.text_input("IMAP服务器", value=IMAP_HOST, key="imap_host")
+        st.number_input("IMAP端口", value=IMAP_PORT, key="imap_port")
+        st.text_input("邮箱账号", value=EMAIL_USER, key="email_user")
+        st.text_input("邮箱密码", type="password", value=EMAIL_PASSWORD, key="email_password")
+        st.divider()
+        run_button = st.button("开始审核", type="primary")
+    
+    # 主内容区
+    st.header("书法班报名审核系统")
+    st.divider()
+    
+    if run_button:
+        # 更新配置
+        global IMAP_HOST, IMAP_PORT, EMAIL_USER, EMAIL_PASSWORD
+        IMAP_HOST = st.session_state.imap_host
+        IMAP_PORT = st.session_state.imap_port
+        EMAIL_USER = st.session_state.email_user
+        EMAIL_PASSWORD = st.session_state.email_password
+        
+        # 执行审核
+        with st.spinner("正在处理邮件和附件..."):
+            admitted, rejected = process_emails()
+        
+        # 显示结果
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("✅ 录取名单")
+            if admitted:
+                st.dataframe(admitted, use_container_width=True)
+                # 下载按钮
+                df_admitted = pd.DataFrame(admitted)
+                csv_admitted = df_admitted.to_csv(index=False, encoding="utf-8-sig")
+                st.download_button(
+                    "下载录取名单",
+                    csv_admitted,
+                    "admitted.csv",
+                    "text/csv",
+                    key="download_admitted"
+                )
+            else:
+                st.info("暂无录取人员")
+        
+        with col2:
+            st.subheader("❌ 拒绝名单")
+            if rejected:
+                st.dataframe(rejected, use_container_width=True)
+                # 下载按钮
+                df_rejected = pd.DataFrame(rejected)
+                csv_rejected = df_rejected.to_csv(index=False, encoding="utf-8-sig")
+                st.download_button(
+                    "下载拒绝名单",
+                    csv_rejected,
+                    "rejected.csv",
+                    "text/csv",
+                    key="download_rejected"
+                )
+            else:
+                st.info("暂无拒绝人员")
+        
+        # 统计信息
+        st.divider()
+        st.info(f"本次审核完成：共录取 {len(admitted)} 人，拒绝 {len(rejected)} 人")
+    
+    else:
+        st.info("请在侧边栏配置邮箱信息，然后点击【开始审核】按钮")
 
-    # 生成表格数据
-    cols1 = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级"]
-    cols2 = ["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级", "拒绝原因"]
-    df_a = pd.DataFrame([x[:6] for x in accept_list], columns=cols1)
-    df_r = pd.DataFrame([x[:7] for x in reject_list], columns=cols2)
-
-    # 结果展示（核心修复：用 Markdown 表格替代 DataFrame，彻底解决前端报错）
-    st.success("✅ 筛选完成！")
-    col1, col2 = st.columns(2)
-    col1.info(f"🎯 最终录取：{len(df_a)} 人")
-    col2.error(f"❌ 最终拒绝：{len(df_r)} 人")
-
-    # 录取名单（纯 Markdown 渲染，0 依赖前端动态组件）
-    st.subheader("✅ 录取名单")
-    st.markdown(df_a.to_markdown(index=False, numalign="left", stralign="left"), unsafe_allow_html=True)
-
-    # 拒绝名单
-    st.subheader("❌ 拒绝名单")
-    st.markdown(df_r.to_markdown(index=False, numalign="left", stralign="left"), unsafe_allow_html=True)
-
-    # 内存生成 Excel，不写本地文件
-    buf_a = BytesIO()
-    buf_r = BytesIO()
-    df_a.to_excel(buf_a, index=False)
-    df_r.to_excel(buf_r, index=False)
-    buf_a.seek(0)
-    buf_r.seek(0)
-
-    # 下载按钮
-    st.subheader("📥 下载名单")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.download_button("📥 下载录取名单.xlsx", buf_a, "录取名单.xlsx", type="primary")
-    with col_b:
-        st.download_button("📥 下载拒绝名单.xlsx", buf_r, "拒绝名单.xlsx", type="primary")
+if __name__ == "__main__":
+    main()
