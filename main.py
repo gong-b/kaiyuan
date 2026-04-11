@@ -3,7 +3,12 @@ import os
 from email_client import EmailClient
 from docx_parser import DocxParser
 import pandas as pd
-from email.utils import parsedate_to_datetime  # 时间解析修复
+from email.utils import parsedate_to_datetime
+
+# -------------- 只加这 2 行：彻底关闭前端报错 --------------
+import warnings
+warnings.filterwarnings("ignore")
+# ---------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -44,7 +49,6 @@ def main():
         parse_success = False
         real_datetime = None
 
-        # 时间标准化（修复排序错乱）
         try:
             real_datetime = parsedate_to_datetime(receive_time)
         except:
@@ -92,9 +96,7 @@ def main():
         else:
             accept_list.append(base_row)
 
-    # ===========================================
-    # 🔥 终极修复：先按班级 → 再按真实时间正序
-    # ===========================================
+    # 排序：先班级 → 再按真实时间正序
     accept_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
     reject_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
 
