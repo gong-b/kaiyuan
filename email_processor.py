@@ -1,145 +1,92 @@
-import logging
-import pdfkit
-import re
 import os
-from pathlib import Path
-from email.header import decode_header
+import logging
 from email.message import Message
-from typing import Optional, List
+from email.header import decode_header
+import pdfkit
 from config import PDF_DIR
 
 logger = logging.getLogger(__name__)
 
 class EmailProcessor:
-    """邮件处理类（适配跨平台）"""
-    pdf_config: pdfkit.configuration.Configuration
+    def __init__(self):
+        # 配置pdfkit（根据实际环境调整wkhtmltopdf路径）
+        self.pdf_config = pdfkit.configuration(wkhtmltopdf='/usr/local/bin/wkhtmltopdf')  # 示例路径，需适配实际环境
 
-    def __init__(self) -> None:
-        # 跨平台 wkhtmltopdf 路径配置
-        if os.name == 'nt':  # Windows
-            wk_path = r"D:\program\wkhtmltopdf\bin\wkhtmltopdf.exe"
-        else:  # Linux/Mac (Streamlit Cloud)
-            wk_path = "/usr/bin/wkhtmltopdf"
-        
-        # 兼容无wkhtmltopdf环境
+    def save_email_pdf(self, msg: Message, student_id: str, name: str):
+        """将邮件内容保存为PDF"""
         try:
-            self.pdf_config = pdfkit.configuration(wkhtmltopdf=wk_path)
-        except:
-            self.pdf_config = pdfkit.configuration()
-            logger.warning("wkhtmltopdf路径配置失败，使用默认配置")
-
-    @staticmethod
-    def sanitize_filename(name: str) -> str:
-        """清理非法文件名字符（跨平台）"""
-        illegal_chars = r'[<>:"/\\|?*]' if os.name == 'nt' else r'[/]'
-        return re.sub(illegal_chars, "_", name).strip()
-
-    def save_email_pdf(self, msg: Message, student_id: str, name: str) -> Optional[Path]:
-        """保存邮件为PDF（兼容无HTML内容）"""
-        try:
-            # 生成安全文件名
-            safe_name = self.sanitize_filename(name)
-            filename = f"{student_id}_{safe_name}"
-            pdf_path = PDF_DIR / f"{filename}.pdf"
-
-            # 提取HTML或纯文本内容
-            html_content = []
+            # 解析邮件内容（文本/HTML）
             text_content = []
+            html_content = []
             
+            # 遍历邮件部分提取内容
             for part in msg.walk():
                 content_type = part.get_content_type()
                 charset = part.get_content_charset() or 'utf-8'
-                payload = part.get_payload(decode=True)
                 
-                if isinstance(payload, bytes):
-                    payload = payload.decode(charset, errors='replace')
-                
-                if content_type == "text/html":
-                    html_content.append(payload)
-                elif content_type == "text/plain":
-                    text_content.append(payload)
-
-            # 优先用HTML，无则用纯文本转HTML
-            content = "\n".join(html_content) if html_content else f"<pre>{'\n'.join(text_content)}</pre>"
+                if content_type == 'text/plain':
+                    try:
+                        text = part.get_payload(decode=True).decode(charset, errors='replace')
+                        text_content.append(text)
+                    except Exception as e:
+                        logger.error(f"提取文本内容失败: {e}")
+                elif content_type == 'text/html':
+                    try:
+                        html = part.get_payload(decode=True).decode(charset, errors='replace')
+                        html_content.append(html)
+                    except Exception as e:
+                        logger.error(f"提取HTML内容失败: {e}")
             
-            if content:
-                # PDF生成配置（解决中文乱码）
-                options = {
-                    'encoding': 'UTF-8',
-                    'no-images': True,
-                    'quiet': ''
-                }
-                pdfkit.from_string(
-                    input=content,
-                    output_path=str(pdf_path),
-                    configuration=self.pdf_config,
-                    options=options
-                )
-                logger.info(f"PDF保存成功: {pdf_path}")
-                return pdf_path
+            # 修复f-string反斜杠问题：将\n定义为变量
+            newline = '\n'
+            # 重构content赋值逻辑，规避反斜杠
+            if html_content:
+                content = newline.join(html_content)
             else:
-                logger.warning(f"无邮件内容可保存: {student_id}_{name}")
-                return None
-                
+                content = f"<pre>{newline.join(text_content)}</pre>"
+            
+            # 生成PDF文件路径
+            pdf_filename = f"{name}_{student_id}.pdf"
+            pdf_path = PDF_DIR / pdf_filename
+            
+            # 生成PDF
+            pdfkit.from_string(content, str(pdf_path), configuration=self.pdf_config)
+            logger.info(f"邮件PDF已保存: {pdf_path}")
+            
         except Exception as e:
-            logger.error(f"PDF生成失败: {student_id}_{name} - {str(e)}")
-            return None
+            logger.error(f"保存邮件PDF失败: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
 
-    def save_attachments(self, msg: Message, student_id: str, name: str) -> List[Path]:
-        """保存邮件附件（增强容错）"""
+    def save_attachments(self, msg: Message, student_id: str, name: str) -> list[os.PathLike]:
+        """保存邮件附件，返回附件文件路径列表"""
         attachments = []
         try:
-            safe_name = self.sanitize_filename(name)
-            save_dir = PDF_DIR / f"{student_id}_{safe_name}_attachments"
-            save_dir.mkdir(exist_ok=True, parents=True)
+            # 创建学生专属附件目录
+            attach_dir = PDF_DIR / f"{name}_{student_id}_attachments"
+            attach_dir.mkdir(exist_ok=True, parents=True)
             
             for part in msg.walk():
-                # 跳过多部分邮件容器
-                if part.get_content_maintype() == 'multipart':
+                # 跳过非附件部分
+                if part.get_content_disposition() not in ('attachment', 'inline'):
                     continue
-                # 跳过无附件标识的部分
-                if part.get('Content-Disposition') is None:
-                    continue
-
+                
                 # 解码附件文件名
                 filename = part.get_filename()
-                if not filename:
-                    continue
-                decoded_filename = self._decode_header(filename)
-                safe_filename = self.sanitize_filename(decoded_filename)
-                filepath = save_dir / safe_filename
-
+                if filename:
+                    decoded_parts = decode_header(filename)
+                    filename = ''.join([
+                        part.decode(charset or 'utf-8', errors='replace') 
+                        for part, charset in decoded_parts
+                    ])
+                
                 # 保存附件
-                try:
-                    payload = part.get_payload(decode=True)
-                    if isinstance(payload, bytes):
-                        with open(filepath, "wb") as f:
-                            f.write(payload)
-                        attachments.append(filepath)
-                        logger.info(f"附件保存成功: {filepath}")
-                    else:
-                        logger.warning(f"附件内容非字节类型: {safe_filename}")
-                except Exception as e:
-                    logger.error(f"保存附件失败: {safe_filename} - {str(e)}")
+                if filename:
+                    file_path = attach_dir / filename
+                    with open(file_path, 'wb') as f:
+                        f.write(part.get_payload(decode=True))
+                    attachments.append(file_path)
+                    logger.info(f"附件已保存: {file_path}")
                     
-            return attachments
         except Exception as e:
-            logger.error(f"附件保存失败: {student_id}_{name} - {str(e)}")
-            return []
-
-    @staticmethod 
-    def _decode_header(header: str) -> str:
-        """安全解码邮件头（增强容错）"""
-        try:
-            decoded_parts = []
-            for part, charset in decode_header(header):
-                if isinstance(part, bytes):
-                    decode_charset = charset or 'utf-8'
-                    decoded_part = part.decode(decode_charset, errors='replace')
-                else:
-                    decoded_part = str(part)
-                decoded_parts.append(decoded_part)
-            return "".join(decoded_parts)
-        except Exception as e:
-            logger.error(f"头信息解码失败: {str(e)}")
-            return str(header) if not isinstance(header, bytes) else header.decode('utf-8', errors='replace')
+            logger.error(f"保存附件失败: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
+        
+        return attachments
