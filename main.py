@@ -1,48 +1,52 @@
-# 👇 直接复制这段代码，覆盖你的 main.py
 import streamlit as st
-import logging
-import os
 import pandas as pd
+import os
 from email_client import EmailClient
 from docx_parser import DocxParser
 from email.utils import parsedate_to_datetime
 from io import BytesIO
 
-# ============= 关键修复：删除所有废弃配置，只保留稳定配置 =============
-# 删掉那行报错的 st.set_option()！
-# ================================================================
-
-# 页面标题
+# 页面配置（必须放在最开头）
+st.set_page_config(page_title="书法班报名筛选系统", layout="wide")
 st.title("🎓 书法班报名自动筛选系统")
 
 # 输入区域
-email = st.text_input("浙大邮箱")
-pwd = st.text_input("客户端专用密码", type="password")
-start_date = st.text_input("开始日期 (例：2025-10-02)")
-end_date = st.text_input("结束日期 (例：2025-10-10)")
+with st.container():
+    col1, col2 = st.columns(2)
+    with col1:
+        email = st.text_input("浙大邮箱", placeholder="zzbgs@zju.edu.cn")
+        pwd = st.text_input("客户端专用密码", type="password")
+    with col2:
+        start_date = st.text_input("开始日期 (格式：YYYY-MM-DD)", value="2025-10-02")
+        end_date = st.text_input("结束日期 (格式：YYYY-MM-DD)", value="2025-10-10")
 
-st.subheader("📂 上传名单")
-xhj_file = st.file_uploader("新鸿基名单", type="xlsx")
-black_file = st.file_uploader("黑名单", type="xlsx")
-last_file = st.file_uploader("去年已参加", type="xlsx")
+# 上传名单
+with st.container():
+    st.subheader("📂 上传名单")
+    col3, col4, col5 = st.columns(3)
+    with col3:
+        xhj_file = st.file_uploader("新鸿基名单", type="xlsx")
+    with col4:
+        black_file = st.file_uploader("黑名单", type="xlsx")
+    with col5:
+        last_file = st.file_uploader("去年已参加名单", type="xlsx")
 
 # 开始筛选按钮
-if st.button("✅ 开始筛选"):
+if st.button("✅ 开始筛选", type="primary", use_container_width=True):
+    # 校验输入
     if not all([email, pwd, start_date, end_date, xhj_file, black_file, last_file]):
-        st.warning("请填写完整信息！")
+        st.error("❌ 请填写完整信息并上传所有名单！")
         st.stop()
 
-    # ---------------------- 核心修复：内存读取，不写磁盘 ----------------------
+    # 内存读取文件（不写磁盘，解决云端权限问题）
+    @st.cache_data
     def get_ids_from_memory(uploaded_file):
         try:
-            # 直接从内存读取，不写本地文件，彻底解决路径报错
-            bytes_data = uploaded_file.getvalue()
-            df = pd.read_excel(BytesIO(bytes_data), dtype=str)
+            df = pd.read_excel(BytesIO(uploaded_file.getvalue()), dtype=str)
             return set(df.iloc[:, 0].dropna().str.strip())
         except Exception as e:
             st.error(f"读取名单失败: {e}")
             return set()
-    # -------------------------------------------------------------------------
 
     xhj_ids = get_ids_from_memory(xhj_file)
     black_ids = get_ids_from_memory(black_file)
@@ -55,11 +59,12 @@ if st.button("✅ 开始筛选"):
     os.environ["END_DATE"] = end_date
 
     # 收取邮件
-    client = EmailClient()
-    mails = client.fetch_mails()
-    st.success(f"📩 共收取邮件：{len(mails)}封")
+    with st.spinner("📩 正在收取邮件..."):
+        client = EmailClient()
+        mails = client.fetch_mails()
+    st.success(f"✅ 共收取邮件：{len(mails)}封")
 
-    # ===================== 你的原始逻辑（完全不动） =====================
+    # 筛选逻辑（100% 保留你原来的逻辑）
     accept_list = []
     reject_list = []
     processed_students = set()
@@ -129,6 +134,7 @@ if st.button("✅ 开始筛选"):
     accept_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
     reject_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
 
+    # 生成最终数据
     accept_final = [[x[0], x[1], x[2], x[3], x[4], x[5]] for x in accept_list]
     reject_final = [[x[0], x[1], x[2], x[3], x[4], x[5], x[7]] for x in reject_list]
 
@@ -138,21 +144,30 @@ if st.button("✅ 开始筛选"):
     df_accept = pd.DataFrame(accept_final, columns=accept_cols)
     df_reject = pd.DataFrame(reject_final, columns=reject_cols)
 
+    # 导出Excel
     df_accept.to_excel("录取名单.xlsx", index=False)
     df_reject.to_excel("拒绝名单.xlsx", index=False)
-    # =================================================================
 
-    # 🔥 最终修复：用 st.write() 显示数据，规避 DataFrame 前端组件报错
+    # 结果展示（用markdown表格，彻底规避DataFrame组件报错）
     st.success("✅ 筛选完成！")
-    st.subheader("✅ 录取名单")
-    st.write(df_accept) # 用 st.write 最稳定，不会触发动态导入模块报错
+    col1, col2 = st.columns(2)
+    col1.info(f"🎯 最终录取：{len(accept_final)} 人")
+    col2.error(f"❌ 最终拒绝：{len(reject_final)} 人")
 
+    # 录取名单（纯markdown渲染，0 前端报错）
+    st.subheader("✅ 录取名单")
+    st.markdown(df_accept.to_markdown(index=False, numalign="left", stralign="left"), unsafe_allow_html=True)
+
+    # 拒绝名单
     st.subheader("❌ 拒绝名单")
-    st.write(df_reject)
+    st.markdown(df_reject.to_markdown(index=False, numalign="left", stralign="left"), unsafe_allow_html=True)
 
     # 下载按钮
-    st.subheader("📥 下载文件")
-    with open("录取名单.xlsx", "rb") as f:
-        st.download_button("下载录取名单.xlsx", f, "录取名单.xlsx")
-    with open("拒绝名单.xlsx", "rb") as f:
-        st.download_button("下载拒绝名单.xlsx", f, "拒绝名单.xlsx")
+    st.subheader("📥 下载名单")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        with open("录取名单.xlsx", "rb") as f:
+            st.download_button("📥 下载录取名单.xlsx", f, "录取名单.xlsx", type="primary")
+    with col_b:
+        with open("拒绝名单.xlsx", "rb") as f:
+            st.download_button("📥 下载拒绝名单.xlsx", f, "拒绝名单.xlsx", type="primary")
