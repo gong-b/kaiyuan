@@ -53,7 +53,8 @@ class EmailClient:
             s = datetime.strptime(self.sd, "%Y-%m-%d").strftime("%d-%b-%Y")
             e = (datetime.strptime(self.ed, "%Y-%m-%d") + timedelta(1)).strftime("%d-%b-%Y")
             _, ids = c.search(None, f'SINCE "{s}" BEFORE "{e}"')
-            for mid in reversed(ids[0].split()):
+            # 正序，保证时间最早在前
+            for mid in ids[0].split():
                 try:
                     _, data = c.fetch(mid, "(RFC822)")
                     msg = email.message_from_bytes(data[0][1])
