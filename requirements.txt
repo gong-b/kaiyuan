@@ -1,4 +1,13 @@
-python-docx
-pandas
-openpyxl
-streamlit
+# 基础依赖
+streamlit>=1.30.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-docx>=0.8.11
+pdfkit>=1.0.0
+imaplib2>=3.6
+pywin32>=306; platform_system == "Windows"
+rich>=13.7.0
+matplotlib>=3.8.0
+pygal>=3.0.0
+pymysql>=1.1.0
+requests>=2.31.0
