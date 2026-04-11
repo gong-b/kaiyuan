@@ -21,7 +21,8 @@ class EmailClient:
             c.login(self.user, self.pwd)
             c.select("INBOX")
             return c
-        except:
+        except Exception as e:
+            print(f"连接失败: {e}")
             return None
 
     def decode_str(self, s):
@@ -30,7 +31,7 @@ class EmailClient:
         except:
             return str(s)
 
-    # ===================== 修复：内存返回附件，不写磁盘 =====================
+    # 内存获取附件，不写本地文件
     def get_attach_memory(self, msg):
         for part in msg.walk():
             if part.get_content_disposition() == "attachment":
@@ -66,17 +67,18 @@ class EmailClient:
                     if sid_match:
                         sid = sid_match.group()
                         name = name_match.group() if name_match else ""
-                        # 内存获取附件
                         attach_io = self.get_attach_memory(msg)
                         mails.append({
                             "student_id": sid,
                             "name": name,
-                            "attach_io": attach_io,  # 不再用路径
+                            "attach_io": attach_io,
                             "receive_time": date_str
                         })
-                except:
+                except Exception as e:
+                    print(f"处理邮件失败: {e}")
                     continue
-        except:
+        except Exception as e:
+            print(f"获取邮件失败: {e}")
             pass
         c.close()
         c.logout()
