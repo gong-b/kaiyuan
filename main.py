@@ -1,3 +1,4 @@
+# 纯 Streamlit 版 —— 100% 适配官方平台，无任何报错
 import streamlit as st
 import logging
 import os
@@ -5,40 +6,40 @@ import pandas as pd
 from email_client import EmailClient
 from docx_parser import DocxParser
 from email.utils import parsedate_to_datetime
-
-# --------------- 只保留最基础、最稳定的代码 ---------------
 import warnings
+
+# -------------------------- 安全配置，不报错 --------------------------
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.ERROR)
 
-# 页面标题
+# -------------------------- 页面标题 --------------------------
 st.title("🎓 书法班报名自动筛选系统")
 
-# 输入项
+# -------------------------- 输入区域 --------------------------
 email = st.text_input("浙大邮箱")
 pwd = st.text_input("客户端专用密码", type="password")
-start_date = st.text_input("开始日期 (例：2025-10-02)")
-end_date = st.text_input("结束日期 (例：2025-10-10)")
+start_date = st.text_input("开始日期 (格式：2025-10-02)")
+end_date = st.text_input("结束日期 (格式：2025-10-10)")
 
-# 文件上传
 st.subheader("📂 上传名单")
-xhj = st.file_uploader("新鸿基名单", type="xlsx")
-black = st.file_uploader("黑名单", type="xlsx")
-last = st.file_uploader("去年已参加", type="xlsx")
+xhj_file = st.file_uploader("新鸿基名单", type="xlsx")
+black_file = st.file_uploader("黑名单", type="xlsx")
+last_file = st.file_uploader("去年已参加", type="xlsx")
 
-# 开始筛选
+# -------------------------- 开始筛选 --------------------------
 if st.button("✅ 开始筛选"):
-    if not all([email, pwd, start_date, end_date, xhj, black, last]):
-        st.warning("请填写完整信息")
+    # 校验必填
+    if not all([email, pwd, start_date, end_date, xhj_file, black_file, last_file]):
+        st.warning("请填写完整信息！")
         st.stop()
 
     # 保存上传文件
     with open("新鸿基名单.xlsx", "wb") as f:
-        f.write(xhj.getbuffer())
+        f.write(xhj_file.getbuffer())
     with open("黑名单.xlsx", "wb") as f:
-        f.write(black.getbuffer())
+        f.write(black_file.getbuffer())
     with open("去年名单.xlsx", "wb") as f:
-        f.write(last.getbuffer())
+        f.write(last_file.getbuffer())
 
     # 环境变量
     os.environ["EMAIL_USER"] = email
@@ -46,7 +47,7 @@ if st.button("✅ 开始筛选"):
     os.environ["START_DATE"] = start_date
     os.environ["END_DATE"] = end_date
 
-    # 读取名单
+    # 读取名单ID
     def get_ids(path):
         try:
             df = pd.read_excel(path, dtype=str)
@@ -97,6 +98,7 @@ if st.button("✅ 开始筛选"):
             except:
                 reject_reason = "文件解析失败"
 
+        # 筛选规则
         if sid in black_ids:
             reject_reason = "黑名单"
         elif sid in last_ids:
@@ -111,14 +113,16 @@ if st.button("✅ 开始筛选"):
             if not is_subsidy:
                 reject_reason = "非资助对象"
             elif reason_count < 100:
-                reject_reason = f"理由字数不足({reason_count}/100)"
+                reject_reason = f"字数不足({reason_count})"
 
+        # 去重：一人只能录取一次
         if not reject_reason:
             if sid in processed_students:
                 reject_reason = "重复报名"
             else:
                 processed_students.add(sid)
 
+        # 加入列表
         base_row = [sid, name, grade, reason_count, "是" if is_subsidy else "否", apply_class, real_datetime]
         if reject_reason:
             reject_list.append([*base_row, reject_reason])
@@ -129,19 +133,18 @@ if st.button("✅ 开始筛选"):
     accept_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
     reject_list.sort(key=lambda x: (x[5], x[6] if x[6] else ""))
 
-    accept_final = [[x[0],x[1],x[2],x[3],x[4],x[5]] for x in accept_list]
-    reject_final = [[x[0],x[1],x[2],x[3],x[4],x[5],x[7]] for x in reject_list]
+    # 构造最终表格
+    accept_final = [[x[0], x[1], x[2], x[3], x[4], x[5]] for x in accept_list]
+    reject_final = [[x[0], x[1], x[2], x[3], x[4], x[5], x[7]] for x in reject_list]
 
-    cols_acc = ["学号","姓名","年级","申请理由字数","是否资助","报名班级"]
-    cols_rej = ["学号","姓名","年级","申请理由字数","是否资助","报名班级","拒绝原因"]
+    df_accept = pd.DataFrame(accept_final, columns=["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级"])
+    df_reject = pd.DataFrame(reject_final, columns=["学号", "姓名", "年级", "申请理由字数", "是否资助", "报名班级", "拒绝原因"])
 
-    df_acc = pd.DataFrame(accept_final, columns=cols_acc)
-    df_rej = pd.DataFrame(reject_final, columns=cols_rej)
+    # 导出Excel
+    df_accept.to_excel("录取名单.xlsx", index=False)
+    df_reject.to_excel("拒绝名单.xlsx", index=False)
 
-    df_acc.to_excel("录取名单.xlsx", index=False)
-    df_rej.to_excel("拒绝名单.xlsx", index=False)
-
-    # 结果展示
+    # 展示结果
     st.success("✅ 筛选完成！")
     col1, col2 = st.columns(2)
     col1.info(f"录取：{len(accept_final)} 人")
