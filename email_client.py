@@ -4,6 +4,7 @@ from email.header import decode_header
 import os
 import re
 from datetime import datetime, timedelta
+from io import BytesIO
 
 class EmailClient:
     def __init__(self):
@@ -29,45 +30,48 @@ class EmailClient:
         except:
             return str(s)
 
-    def save_attach(self, msg, sid):
+    # ===================== 修复：内存返回附件，不写磁盘 =====================
+    def get_attach_memory(self, msg):
         for part in msg.walk():
             if part.get_content_disposition() == "attachment":
                 fn = part.get_filename()
-                if not fn: continue
-                fn, c = decode_header(fn)[0]
-                if isinstance(fn, bytes): fn = fn.decode(c or "utf-8")
+                if not fn:
+                    continue
+                fn = self.decode_str(fn)
                 if fn.lower().endswith(".docx"):
-                    os.makedirs("data", exist_ok=True)
-                    p = f"data/{sid}_{fn}"
-                    with open(p, "wb") as f:
-                        f.write(part.get_payload(decode=True))
-                    return p
-        return ""
+                    data = part.get_payload(decode=True)
+                    return BytesIO(data)
+        return None
 
     def fetch_mails(self):
         mails = []
         c = self.connect()
-        if not c: return mails
+        if not c:
+            return mails
 
         try:
             s = datetime.strptime(self.sd, "%Y-%m-%d").strftime("%d-%b-%Y")
             e = (datetime.strptime(self.ed, "%Y-%m-%d") + timedelta(1)).strftime("%d-%b-%Y")
             _, ids = c.search(None, f'SINCE "{s}" BEFORE "{e}"')
-            # 正序，保证时间最早在前
+            
             for mid in ids[0].split():
                 try:
                     _, data = c.fetch(mid, "(RFC822)")
                     msg = email.message_from_bytes(data[0][1])
                     subj = self.decode_str(msg["Subject"])
                     date_str = msg.get("Date", "")
-                    sid = re.search(r"\d{10}", subj)
-                    name = re.search(r"[\u4e00-\u9fa5]{2,4}", subj)
-                    if sid:
-                        attach = self.save_attach(msg, sid.group())
+                    sid_match = re.search(r"\d{10}", subj)
+                    name_match = re.search(r"[\u4e00-\u9fa5]{2,4}", subj)
+
+                    if sid_match:
+                        sid = sid_match.group()
+                        name = name_match.group() if name_match else ""
+                        # 内存获取附件
+                        attach_io = self.get_attach_memory(msg)
                         mails.append({
-                            "student_id": sid.group(),
-                            "name": name.group() if name else "",
-                            "attachment_path": attach,
+                            "student_id": sid,
+                            "name": name,
+                            "attach_io": attach_io,  # 不再用路径
                             "receive_time": date_str
                         })
                 except:
