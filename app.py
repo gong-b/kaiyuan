@@ -13,6 +13,7 @@ from docx import Document
 import tempfile
 import os
 from io import BytesIO
+import time
 
 # 页面配置
 st.set_page_config(
@@ -23,7 +24,7 @@ st.set_page_config(
 st.title("📧 浙江大学开源课堂报名自动审核系统")
 
 # --------------------------
-# 工具函数
+# 工具函数（修复版，带超时+进度）
 # --------------------------
 def decode_subject(msg: Message) -> str:
     decoded_parts = []
@@ -77,24 +78,34 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
-def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
+def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar, status_text):
     mails = []
     ctx = ssl.create_default_context()
     try:
-        with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx) as conn:
+        # ✅ 增加超时时间，防止无限等待
+        with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
+            status_text.text("正在登录邮箱...")
             conn.login(user, pwd)
             conn.select("INBOX")
             
+            # ✅ 优化日期搜索，避免服务器异常
             since_str = start_date.strftime("%d-%b-%Y")
             before_date = end_date + timedelta(days=1)
             before_str = before_date.strftime("%d-%b-%Y")
             
+            status_text.text("正在搜索邮件...")
             status, data = conn.uid('SEARCH', 'SINCE', since_str, 'BEFORE', before_str)
             if status != "OK" or not data[0]:
+                status_text.text("未找到符合条件的邮件")
                 return mails
             
             uids = data[0].split()
-            for uid in uids:
+            total = len(uids)
+            status_text.text(f"找到 {total} 封邮件，正在解析...")
+            
+            # ✅ 增加进度条，实时显示进度
+            for i, uid in enumerate(uids):
+                progress_bar.progress((i+1)/total, text=f"已解析 {i+1}/{total} 封邮件")
                 try:
                     st, msg_data = conn.uid('FETCH', uid, '(RFC822)')
                     if st != "OK" or not isinstance(msg_data[0][1], bytes):
@@ -104,12 +115,13 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
                     subject = decode_subject(msg)
                     recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
                     
+                    # ✅ 二次严格过滤日期，避免服务器搜索误差
                     if recv_time:
                         mail_dt = recv_time.date()
                         if not (start_date <= mail_dt <= end_date):
                             continue
 
-                    # 过滤：只抓开源课堂报名邮件
+                    # ✅ 严格过滤报名邮件
                     subject_clean = subject.replace(" ", "").replace("　", "")
                     if "开源课堂" not in subject_clean and "报名" not in subject_clean:
                         continue
@@ -123,10 +135,15 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
                         "time": recv_time,
                         "msg": msg
                     })
-                except:
+                except Exception as e:
+                    st.warning(f"解析第 {i+1} 封邮件时出错: {str(e)}")
                     continue
+            status_text.text("邮件解析完成！")
+            progress_bar.empty()
+    except imaplib.IMAP4.error as e:
+        st.error(f"邮箱认证失败：{str(e)}，请检查邮箱/客户端密码是否正确")
     except Exception as e:
-        st.error(f"邮箱登录/抓取失败：{str(e)}")
+        st.error(f"邮箱连接失败：{str(e)}，请检查网络/IMAP设置")
     return mails
 
 def save_attachments(msg, save_dir):
@@ -181,8 +198,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("📅 报名时间范围")
-    start_date = st.date_input("开始日期", datetime(2025,3,1))
-    end_date = st.date_input("截止日期", datetime(2025,3,31))
+    # ✅ 默认设置合理的日期范围，避免用户误设同一天
+    start_date = st.date_input("开始日期", datetime(2026,3,1))
+    end_date = st.date_input("截止日期", datetime(2026,4,1))
 
     st.markdown("---")
     st.header("📋 审核名单上传")
@@ -190,12 +208,17 @@ with st.sidebar:
     f_last = st.file_uploader("去年已参加名单", type="xlsx")
     f_black = st.file_uploader("黑名单", type="xlsx")
 
+# ✅ 日期合法性校验
+if start_date > end_date:
+    st.error("❌ 开始日期不能晚于截止日期！")
+    st.stop()
+
 hongji_ids = load_ids(f_hongji)
 last_ids = load_ids(f_last)
 black_ids = load_ids(f_black)
 
 # --------------------------
-# 抓取邮件
+# 抓取邮件（带进度）
 # --------------------------
 st.subheader("1️⃣ 抓取报名邮件")
 st.caption(f"当前抓取范围：{start_date} ~ {end_date}")
@@ -203,8 +226,11 @@ if st.button("🔍 开始抓取邮件"):
     if not user or not pwd:
         st.warning("请填写完整的浙大邮箱和客户端密码")
     else:
-        with st.spinner("正在抓取邮件..."):
-            st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date)
+        # ✅ 增加进度条和状态提示
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        with st.spinner("正在连接邮箱..."):
+            st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date, progress_bar, status_text)
         st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封报名邮件")
 
 if st.session_state.mails:
