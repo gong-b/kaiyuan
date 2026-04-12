@@ -8,7 +8,7 @@ from email import message_from_bytes
 from email.message import Message
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from docx import Document
 import tempfile
@@ -77,26 +77,40 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
-def fetch_emails(imap_host, port, user, pwd, start_date):
+def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
     mails = []
     ctx = ssl.create_default_context()
     try:
         with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx) as conn:
             conn.login(user, pwd)
             conn.select("INBOX")
-            date_str = start_date.strftime("%d-%b-%Y")
-            status, data = conn.uid('SEARCH', 'SINCE', date_str)
+            
+            # 构造日期范围：SINCE 开始日期 BEFORE 结束日期+1天
+            since_str = start_date.strftime("%d-%b-%Y")
+            before_date = end_date + timedelta(days=1)
+            before_str = before_date.strftime("%d-%b-%Y")
+            
+            status, data = conn.uid('SEARCH', 'SINCE', since_str, 'BEFORE', before_str)
             if status != "OK" or not data[0]:
                 return mails
+            
             uids = data[0].split()
             for uid in uids:
                 try:
                     st, msg_data = conn.uid('FETCH', uid, '(RFC822)')
                     if st != "OK" or not isinstance(msg_data[0][1], bytes):
                         continue
+                        
                     msg = message_from_bytes(msg_data[0][1])
                     subject = decode_subject(msg)
                     recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
+                    
+                    # 二次精确过滤时间（防止IMAP搜索误差）
+                    if recv_time:
+                        mail_dt = recv_time.date()
+                        if not (start_date <= mail_dt <= end_date):
+                            continue
+                    
                     name, sid = parse_name_id(subject)
                     mails.append({
                         "uid": uid.decode(),
@@ -161,7 +175,11 @@ with st.sidebar:
     port = st.number_input("端口", value=993)
     user = st.text_input("浙大邮箱")
     pwd = st.text_input("客户端密码", type="password")
-    start_date = st.date_input("抓取起始日期", datetime.now())
+
+    st.markdown("---")
+    st.header("📅 报名时间范围")
+    start_date = st.date_input("开始日期", datetime(2025,3,1))
+    end_date = st.date_input("截止日期", datetime(2025,3,31))
 
     st.markdown("---")
     st.header("📋 审核名单上传")
@@ -177,12 +195,13 @@ black_ids = load_ids(f_black)
 # 抓取邮件
 # --------------------------
 st.subheader("1️⃣ 抓取报名邮件")
+st.caption(f"当前抓取范围：{start_date} ~ {end_date}")
 if st.button("🔍 开始抓取邮件"):
     if not user or not pwd:
         st.warning("请填写完整的浙大邮箱和客户端密码")
     else:
         with st.spinner("正在抓取邮件..."):
-            st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date)
+            st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date)
         st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封邮件")
 
 if st.session_state.mails:
@@ -214,10 +233,10 @@ if st.button("✅ 开始自动审核"):
                 msg = mail["msg"]
 
                 if not sid or not name:
-                    reject.append({"学号": "未知", "姓名": "未知", "原因": "邮件主题格式错误，无法识别姓名学号"})
+                    reject.append({"学号": "未知", "姓名": "未知", "原因": "邮件主题格式错误"})
                     continue
 
-                # 审核逻辑（严格按你的要求）
+                # 审核逻辑
                 if sid in black_ids:
                     reject.append({"学号": sid, "姓名": name, "原因": "黑名单"})
                     continue
@@ -228,7 +247,7 @@ if st.button("✅ 开始自动审核"):
                     admit.append({"学号": sid, "姓名": name, "审核结果": "新鸿基直接录取"})
                     continue
 
-                # 解析附件
+                # 附件解析
                 att_path = os.path.join(tmp_dir, f"{sid}")
                 attachments = save_attachments(msg, att_path)
                 docx_files = [f for f in attachments if f.endswith(".docx")]
@@ -237,12 +256,11 @@ if st.button("✅ 开始自动审核"):
                     reject.append({"学号": sid, "姓名": name, "原因": "未找到docx附件"})
                     continue
 
-                # 读取申请表内容
                 doc_info = parse_docx(docx_files[0])
                 if not doc_info["is_supported"]:
                     reject.append({"学号": sid, "姓名": name, "原因": "非学生资助对象"})
                 elif doc_info["reason_length"] < 95:
-                    reject.append({"学号": sid, "姓名": name, "原因": f"申请理由字数不足（{doc_info['reason_length']}字）"})
+                    reject.append({"学号": sid, "姓名": name, "原因": f"理由字数不足({doc_info['reason_length']}字)"})
                 else:
                     admit.append({"学号": sid, "姓名": name, "审核结果": "审核通过"})
 
@@ -276,4 +294,4 @@ else:
     st.info("点击「开始自动审核」查看结果")
 
 st.markdown("---")
-st.caption("审核规则：新鸿基直接录取 → 黑名单/去年参加过 → 拒绝 → 非资助对象 → 拒绝 → 理由字数<95 → 拒绝")
+st.caption("审核规则：新鸿基直接录取 → 黑名单/去年参加过 → 拒绝 → 非资助对象 → 拒绝 → 理由<95字 → 拒绝")
