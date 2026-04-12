@@ -13,7 +13,6 @@ from docx import Document
 import tempfile
 import os
 from io import BytesIO
-import time
 
 # 页面配置
 st.set_page_config(
@@ -24,7 +23,7 @@ st.set_page_config(
 st.title("📧 浙江大学开源课堂报名自动审核系统")
 
 # --------------------------
-# 工具函数（适配自定义文件夹+超时+进度）
+# 工具函数
 # --------------------------
 def decode_subject(msg: Message) -> str:
     decoded_parts = []
@@ -78,75 +77,50 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
-def list_mailboxes(conn):
-    """获取邮箱所有文件夹列表"""
-    status, data = conn.list()
-    if status != "OK":
-        return []
-    mailboxes = []
-    for line in data:
-        if not line:
-            continue
-        parts = line.decode().split('" "')
-        if len(parts) >= 2:
-            mb = parts[-1].strip('"')
-            mailboxes.append(mb)
-    return mailboxes
-
 def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, progress_bar, status_text):
     mails = []
     ctx = ssl.create_default_context()
     try:
-        # ✅ 增加超时时间，防止无限等待
         with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
             status_text.text("正在登录邮箱...")
             conn.login(user, pwd)
-            
-            # ✅ 选择指定文件夹（默认开源课堂，兼容收件箱）
             status_text.text(f"正在打开文件夹：{mailbox}")
-            status, _ = conn.select(mailbox, readonly=True)
-            if status != "OK":
-                st.error(f"无法打开文件夹 {mailbox}，请检查文件夹名称")
-                return mails
-            
-            # ✅ 优化日期搜索，避免服务器异常
+            conn.select(mailbox, readonly=True)
+
             since_str = start_date.strftime("%d-%b-%Y")
             before_date = end_date + timedelta(days=1)
             before_str = before_date.strftime("%d-%b-%Y")
-            
+
             status_text.text("正在搜索邮件...")
-            status, data = conn.uid('SEARCH', 'SINCE', since_str, 'BEFORE', before_str)
-            if status != "OK" or not data[0]:
+            result, data = conn.uid('SEARCH', 'SINCE', since_str, 'BEFORE', before_str)
+            if result != "OK" or not data[0]:
                 status_text.text("未找到符合条件的邮件")
                 return mails
-            
+
             uids = data[0].split()
             total = len(uids)
             status_text.text(f"找到 {total} 封邮件，正在解析...")
-            
-            # ✅ 增加进度条，实时显示进度
+
             for i, uid in enumerate(uids):
-                progress_bar.progress((i+1)/total, text=f"已解析 {i+1}/{total} 封邮件")
+                progress_bar.progress((i+1)/total, text=f"已解析 {i+1}/{total}")
                 try:
-                    st, msg_data = conn.uid('FETCH', uid, '(RFC822)')
-                    if st != "OK" or not isinstance(msg_data[0][1], bytes):
+                    res, dat = conn.uid('FETCH', uid, '(RFC822)')
+                    if res != "OK" or not isinstance(dat[0][1], bytes):
                         continue
-                        
-                    msg = message_from_bytes(msg_data[0][1])
+
+                    msg = message_from_bytes(dat[0][1])
                     subject = decode_subject(msg)
                     recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
-                    
-                    # ✅ 二次严格过滤日期，避免服务器搜索误差
+
                     if recv_time:
                         mail_dt = recv_time.date()
                         if not (start_date <= mail_dt <= end_date):
                             continue
 
-                    # ✅ 严格过滤报名邮件（适配你的邮件主题）
                     subject_clean = subject.replace(" ", "").replace("　", "")
-                    if "报名申请" not in subject_clean and "报名名单申请" not in subject_clean:
+                    if "开源课堂" not in subject_clean and "报名" not in subject_clean:
                         continue
-                    
+
                     name, sid = parse_name_id(subject)
                     mails.append({
                         "uid": uid.decode(),
@@ -156,15 +130,13 @@ def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, prog
                         "time": recv_time,
                         "msg": msg
                     })
-                except Exception as e:
-                    st.warning(f"解析第 {i+1} 封邮件时出错: {str(e)}")
+                except:
                     continue
-            status_text.text("邮件解析完成！")
+
+            status_text.text("解析完成！")
             progress_bar.empty()
-    except imaplib.IMAP4.error as e:
-        st.error(f"邮箱认证失败：{str(e)}，请检查邮箱/客户端密码是否正确")
     except Exception as e:
-        st.error(f"邮箱连接失败：{str(e)}，请检查网络/IMAP设置")
+        st.error(f"连接/登录失败：{str(e)}")
     return mails
 
 def save_attachments(msg, save_dir):
@@ -198,7 +170,7 @@ def load_ids(uploaded):
     return set(df[col].astype(str).str.strip().tolist())
 
 # --------------------------
-# 会话状态
+# 状态
 # --------------------------
 if "mails" not in st.session_state:
     st.session_state.mails = []
@@ -206,11 +178,9 @@ if "admitted" not in st.session_state:
     st.session_state.admitted = []
 if "rejected" not in st.session_state:
     st.session_state.rejected = []
-if "mailboxes" not in st.session_state:
-    st.session_state.mailboxes = []
 
 # --------------------------
-# 侧边栏配置（新增文件夹选择）
+# 侧边栏
 # --------------------------
 with st.sidebar:
     st.header("⚙️ 邮箱配置")
@@ -219,93 +189,69 @@ with st.sidebar:
     user = st.text_input("浙大邮箱")
     pwd = st.text_input("客户端密码", type="password")
 
-    # ✅ 新增：获取并选择邮件文件夹
-    if st.button("🔄 获取邮箱文件夹"):
-        if not user or not pwd:
-            st.warning("请先填写邮箱和密码")
-        else:
-            try:
-                ctx = ssl.create_default_context()
-                with imaplib.IMAP4_SSL(imap, port, ssl_context=ctx, timeout=30) as conn:
-                    conn.login(user, pwd)
-                    st.session_state.mailboxes = list_mailboxes(conn)
-                    st.success(f"✅ 成功获取 {len(st.session_state.mailboxes)} 个文件夹")
-            except Exception as e:
-                st.error(f"获取文件夹失败：{str(e)}")
-
-    if st.session_state.mailboxes:
-        # ✅ 默认选中「开源课堂」文件夹，适配你的需求
-        default_idx = st.session_state.mailboxes.index("开源课堂") if "开源课堂" in st.session_state.mailboxes else 0
-        mailbox = st.selectbox("选择邮件文件夹", st.session_state.mailboxes, index=default_idx)
-    else:
-        mailbox = st.text_input("手动输入文件夹名称", value="开源课堂")
+    st.markdown("---")
+    st.subheader("📂 邮件文件夹")
+    st.info("默认：开源课堂（你的报名文件所在文件夹）")
+    mailbox = st.text_input("文件夹名称", value="开源课堂")
 
     st.markdown("---")
-    st.header("📅 报名时间范围")
+    st.header("📅 时间范围")
     start_date = st.date_input("开始日期", datetime(2026,3,1))
-    end_date = st.date_input("截止日期", datetime(2026,4,1))
+    end_date = st.date_input("截止日期", datetime(2026,4,10))
 
     st.markdown("---")
-    st.header("📋 审核名单上传")
+    st.header("📋 名单上传")
     f_hongji = st.file_uploader("新鸿基学生名单", type="xlsx")
     f_last = st.file_uploader("去年已参加名单", type="xlsx")
     f_black = st.file_uploader("黑名单", type="xlsx")
-
-# ✅ 日期合法性校验
-if start_date > end_date:
-    st.error("❌ 开始日期不能晚于截止日期！")
-    st.stop()
 
 hongji_ids = load_ids(f_hongji)
 last_ids = load_ids(f_last)
 black_ids = load_ids(f_black)
 
 # --------------------------
-# 抓取邮件（带进度）
+# 抓取
 # --------------------------
 st.subheader("1️⃣ 抓取报名邮件")
-st.caption(f"当前抓取范围：{start_date} ~ {end_date} | 文件夹：{mailbox}")
-if st.button("🔍 开始抓取邮件"):
+st.caption(f"文件夹：{mailbox} | 时间：{start_date} ~ {end_date}")
+if st.button("🔍 开始抓取"):
     if not user or not pwd:
-        st.warning("请填写完整的浙大邮箱和客户端密码")
+        st.warning("请填写邮箱和密码")
     else:
-        # ✅ 增加进度条和状态提示
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        with st.spinner("正在连接邮箱..."):
-            st.session_state.mails = fetch_emails(imap, port, user, pwd, mailbox, start_date, end_date, progress_bar, status_text)
-        st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封报名邮件")
+        pb = st.progress(0)
+        tx = st.empty()
+        st.session_state.mails = fetch_emails(imap, port, user, pwd, mailbox, start_date, end_date, pb, tx)
+        st.success(f"✅ 抓取完成：{len(st.session_state.mails)} 封")
 
 if st.session_state.mails:
-    with st.expander("查看抓取到的邮件列表"):
+    with st.expander("查看邮件"):
         df = pd.DataFrame([{
-            "学号": x["sid"] or "未知",
-            "姓名": x["name"] or "未知",
-            "邮件主题": x["subject"]
-        } for x in st.session_state.mails])
+            "学号": m["sid"] or "未知",
+            "姓名": m["name"] or "未知",
+            "主题": m["subject"]
+        } for m in st.session_state.mails])
         st.dataframe(df, use_container_width=True)
 
 # --------------------------
-# 自动审核
+# 审核
 # --------------------------
-st.subheader("2️⃣ 自动审核报名")
-if st.button("✅ 开始自动审核"):
+st.subheader("2️⃣ 自动审核")
+if st.button("✅ 开始审核"):
     if not st.session_state.mails:
         st.warning("请先抓取邮件")
     else:
         admit = []
         reject = []
-        tmp_dir = tempfile.mkdtemp()
+        tmp = tempfile.mkdtemp()
 
-        with st.spinner("正在审核中..."):
+        with st.spinner("审核中..."):
             for mail in st.session_state.mails:
                 sid = mail["sid"]
                 name = mail["name"]
-                subject = mail["subject"]
                 msg = mail["msg"]
 
                 if not sid or not name:
-                    reject.append({"学号": "未知", "姓名": "未知", "原因": "邮件主题格式错误"})
+                    reject.append({"学号": "未知", "姓名": "未知", "原因": "格式错误"})
                     continue
 
                 if sid in black_ids:
@@ -315,54 +261,48 @@ if st.button("✅ 开始自动审核"):
                     reject.append({"学号": sid, "姓名": name, "原因": "去年已参加"})
                     continue
                 if sid in hongji_ids:
-                    admit.append({"学号": sid, "姓名": name, "审核结果": "新鸿基直接录取"})
+                    admit.append({"学号": sid, "姓名": name, "结果": "新鸿基直接录取"})
                     continue
 
-                att_path = os.path.join(tmp_dir, f"{sid}")
-                attachments = save_attachments(msg, att_path)
-                docx_files = [f for f in attachments if f.endswith(".docx")]
+                att_dir = os.path.join(tmp, sid)
+                atts = save_attachments(msg, att_dir)
+                docxs = [f for f in atts if f.endswith(".docx")]
 
-                if not docx_files:
-                    reject.append({"学号": sid, "姓名": name, "原因": "未找到docx附件"})
+                if not docxs:
+                    reject.append({"学号": sid, "姓名": name, "原因": "无附件"})
                     continue
 
-                doc_info = parse_docx(docx_files[0])
-                if not doc_info["is_supported"]:
-                    reject.append({"学号": sid, "姓名": name, "原因": "非学生资助对象"})
-                elif doc_info["reason_length"] < 95:
-                    reject.append({"学号": sid, "姓名": name, "原因": f"理由字数不足({doc_info['reason_length']}字)"})
+                info = parse_docx(docxs[0])
+                if not info["is_supported"]:
+                    reject.append({"学号": sid, "姓名": name, "原因": "非资助对象"})
+                elif info["reason_length"] < 95:
+                    reject.append({"学号": sid, "姓名": name, "原因": f"字数不足({info['reason_length']})"})
                 else:
-                    admit.append({"学号": sid, "姓名": name, "审核结果": "审核通过"})
+                    admit.append({"学号": sid, "姓名": name, "结果": "审核通过"})
 
         st.session_state.admitted = admit
         st.session_state.rejected = reject
-        st.success(f"🎯 审核完成：录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
+        st.success(f"🎯 录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
 
 # --------------------------
-# 结果展示 + 正常下载
+# 下载
 # --------------------------
-st.subheader("3️⃣ 审核结果与导出")
+st.subheader("3️⃣ 结果导出")
 if st.session_state.admitted or st.session_state.rejected:
-    tab1, tab2 = st.tabs(["✅ 录取名单", "❌ 拒绝名单"])
-    with tab1:
-        df_admit = pd.DataFrame(st.session_state.admitted)
-        st.dataframe(df_admit, use_container_width=True)
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_admit.to_excel(writer, index=False)
-        st.download_button("📥 下载录取名单", output.getvalue(), "录取名单.xlsx")
-
-    with tab2:
-        df_reject = pd.DataFrame(st.session_state.rejected)
-        st.dataframe(df_reject, use_container_width=True)
-        
-        output2 = BytesIO()
-        with pd.ExcelWriter(output2, engine='openpyxl') as writer:
-            df_reject.to_excel(writer, index=False)
-        st.download_button("📥 下载拒绝名单", output2.getvalue(), "拒绝名单.xlsx")
+    t1, t2 = st.tabs(["✅ 录取", "❌ 拒绝"])
+    with t1:
+        dfa = pd.DataFrame(st.session_state.admitted)
+        st.dataframe(dfa, use_container_width=True)
+        out = BytesIO()
+        with pd.ExcelWriter(out, engine='openpyxl') as w:
+            dfa.to_excel(w, index=False)
+        st.download_button("📥 下载录取名单", out.getvalue(), "录取名单.xlsx")
+    with t2:
+        dfr = pd.DataFrame(st.session_state.rejected)
+        st.dataframe(dfr, use_container_width=True)
+        out2 = BytesIO()
+        with pd.ExcelWriter(out2, engine='openpyxl') as w:
+            dfr.to_excel(w, index=False)
+        st.download_button("📥 下载拒绝名单", out2.getvalue(), "拒绝名单.xlsx")
 else:
-    st.info("点击「开始自动审核」查看结果")
-
-st.markdown("---")
-st.caption("审核规则：新鸿基直接录取 → 黑名单/去年参加过 → 拒绝 → 非资助对象 → 拒绝 → 理由<95字 → 拒绝")
+    st.info("点击审核查看结果")
