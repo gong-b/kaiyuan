@@ -45,7 +45,7 @@ def decode_subject(msg: Message) -> str:
             decoded_parts.append("[解码失败]")
     return "".join(decoded_parts)
 
-def parse_name_id(subject: str) -> tuple[str | None, str | None]:
+def parse_name_id(subject: str) -> tuple[str | None, None]:
     s = re.sub(r"\s+", "", subject)
     pattern = re.compile(r"([\u4e00-\u9fa5]{2,}).*?(\d{8,12})")
     match = pattern.search(s)
@@ -77,6 +77,9 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
+def utf7_encode(s):
+    return s.encode('utf-7').decode().replace('+', '&')
+
 def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, progress_bar, status_text):
     mails = []
     ctx = ssl.create_default_context()
@@ -84,8 +87,11 @@ def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, prog
         with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
             status_text.text("正在登录邮箱...")
             conn.login(user, pwd)
+            
+            # 🔥 关键修复：中文文件夹 UTF7 编码
+            encoded_mailbox = utf7_encode(mailbox)
             status_text.text(f"正在打开文件夹：{mailbox}")
-            conn.select(mailbox, readonly=True)
+            conn.select(encoded_mailbox, readonly=True)
 
             since_str = start_date.strftime("%d-%b-%Y")
             before_date = end_date + timedelta(days=1)
@@ -191,7 +197,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("📂 邮件文件夹")
-    st.info("默认：开源课堂（你的报名文件所在文件夹）")
+    st.success("✅ 已自动适配中文文件夹")
     mailbox = st.text_input("文件夹名称", value="开源课堂")
 
     st.markdown("---")
@@ -199,7 +205,7 @@ with st.sidebar:
     start_date = st.date_input("开始日期", datetime(2026,3,1))
     end_date = st.date_input("截止日期", datetime(2026,4,10))
 
-    st.markdown("---")
+    st.mark("---")
     st.header("📋 名单上传")
     f_hongji = st.file_uploader("新鸿基学生名单", type="xlsx")
     f_last = st.file_uploader("去年已参加名单", type="xlsx")
