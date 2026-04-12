@@ -276,7 +276,7 @@ with col_clean:
             for file in DATA_DIR.glob("*.log"):
                 file.unlink(missing_ok=True)
             # 清理附件目录
-            shutil.rmtree(DATA_DIR / "pdfs", ignore_errors=True)
+            shutil.rmtree(DATA_DIR / "attachments", ignore_errors=True)
             st.success("✅ 所有数据已清理完成！")
         except Exception as e:
             st.error(f"❌ 清理失败：{str(e)}")
