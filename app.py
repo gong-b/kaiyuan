@@ -20,7 +20,7 @@ st.set_page_config(
     page_icon="📧",
     layout="wide"
 )
-st.title("📧 浙江大学开源课堂报名自动审核系统")
+st.title("📧 浙江大学开源课堂报名审核系统")
 
 # --------------------------
 # 工具函数
@@ -32,14 +32,7 @@ def decode_subject(msg: Message) -> str:
             if charset:
                 decoded = part.decode(charset, errors='replace')
             else:
-                for enc in ['utf-8', 'gb18030', 'gbk', 'big5']:
-                    try:
-                        decoded = part.decode(enc)
-                        break
-                    except:
-                        continue
-                else:
-                    decoded = part.decode('utf-8', errors='replace')
+                decoded = part.decode('utf-8', errors='replace')
             decoded_parts.append(decoded)
         except:
             decoded_parts.append("[解码失败]")
@@ -62,80 +55,47 @@ def parse_docx(filepath: str) -> dict:
         table = doc.tables[0]
         reason_text = ""
         for row in table.rows:
-            cells = row.cells
-            for idx, cell in enumerate(cells):
+            for cell in row.cells:
                 t = cell.text.strip()
                 if "是否为学生资助对象" in t:
-                    if idx + 1 < len(cells):
-                        val = cells[idx+1].text.strip()
-                        result["is_supported"] = ("是" in val) and ("不是" not in val)
+                    result["is_supported"] = "是" in t
                 if "申请理由" in t:
-                    reason_text += cell.text.strip()
-        reason_text = re.sub(r"\s+", "", reason_text)
+                    reason_text += t.strip()
         result["reason_length"] = len(reason_text)
     except:
         pass
     return result
 
-# --------------------------
-# 🔥 核心修复：IMAP UTF-7 编码（浙大邮箱中文专用）
-# --------------------------
-def imap_utf7_encode(s):
-    import binascii
-    res = []
-    for c in s:
-        if ord(c) < 128 and c != '&':
-            res.append(c)
-        elif c == '&':
-            res.append('&-')
-        else:
-            res.append('&' + binascii.b2a_base64(c.encode('utf-16be')).decode().strip() + '-')
-    return ''.join(res)
-
-def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar, status_text):
+def fetch_emails(imap_host, port, user, pwd, start_date, end_date, pb, status_text):
     mails = []
     ctx = ssl.create_default_context()
-    
     try:
-        with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
-            status_text.text("登录中...")
+        with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=20) as conn:
             conn.login(user, pwd)
+            
+            # ✅ 只使用收件箱 INBOX，100% 不报错
+            conn.select("INBOX", readonly=True)
 
-            # ==============================================
-            # ✅ 终极修复：中文文件夹「开源课堂」编码
-            # ==============================================
-            folder_name = "开源课堂"
-            encoded_folder = imap_utf7_encode(folder_name)
-            status_text.text(f"打开文件夹：{folder_name}")
-            conn.select(encoded_folder, readonly=True)
-
-            # 搜索邮件
             since = start_date.strftime("%d-%b-%Y")
             before = (end_date + timedelta(1)).strftime("%d-%b-%Y")
-            status_text.text("搜索邮件...")
+            status_text.text("搜索邮件中...")
             
-            result, data = conn.uid('SEARCH', None, 'SINCE', since, 'BEFORE', before)
-            if result != "OK" or not data[0]:
+            res, data = conn.uid('SEARCH', None, 'SINCE', since, 'BEFORE', before)
+            if not data[0]:
                 status_text.text("未找到邮件")
                 return mails
 
             uids = data[0].split()
             total = len(uids)
-            status_text.text(f"找到 {total} 封，解析中...")
-
             for i, uid in enumerate(uids):
-                progress_bar.progress((i+1)/total, text=f"{i+1}/{total}")
+                pb.progress((i+1)/total, text=f"{i+1}/{total}")
                 try:
-                    res, dat = conn.uid('FETCH', uid, '(RFC822)')
-                    if res != "OK" or not dat[0] or not isinstance(dat[0][1], bytes):
-                        continue
-
+                    _, dat = conn.uid('FETCH', uid, '(RFC822)')
                     msg = message_from_bytes(dat[0][1])
                     subject = decode_subject(msg)
-                    recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
-
-                    sub_clean = subject.replace(" ", "").replace("　", "")
-                    if "报名" not in sub_clean and "开源课堂" not in sub_clean:
+                    
+                    # 只抓报名邮件
+                    if "报名" not in subject and "开源课堂" not in subject:
                         continue
 
                     name, sid = parse_name_id(subject)
@@ -144,15 +104,12 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
                         "subject": subject,
                         "name": name,
                         "sid": sid,
-                        "time": recv_time,
                         "msg": msg
                     })
                 except:
                     continue
-
-            progress_bar.empty()
-            status_text.text("完成！")
-
+        pb.empty()
+        status_text.text("完成")
     except Exception as e:
         st.error(f"错误：{str(e)}")
     return mails
@@ -161,8 +118,6 @@ def save_attachments(msg, save_dir):
     paths = []
     os.makedirs(save_dir, exist_ok=True)
     for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
         if part.get("Content-Disposition") is None:
             continue
         fn = part.get_filename()
@@ -171,7 +126,7 @@ def save_attachments(msg, save_dir):
         try:
             fn = decode_header(fn)[0][0]
             if isinstance(fn, bytes):
-                fn = fn.decode("utf-8", "replace")
+                fn = fn.decode()
             p = os.path.join(save_dir, fn)
             with open(p, "wb") as f:
                 f.write(part.get_payload(decode=True))
@@ -188,7 +143,7 @@ def load_ids(uploaded):
     return set(df[col].astype(str).str.strip().tolist())
 
 # --------------------------
-# 状态
+# 全局状态
 # --------------------------
 if "mails" not in st.session_state:
     st.session_state.mails = []
@@ -225,15 +180,15 @@ black = load_ids(f_black)
 # --------------------------
 # 抓取
 # --------------------------
-st.subheader("1️⃣ 抓取邮件（自动从【开源课堂】读取）")
+st.subheader("1️⃣ 抓取邮件（从收件箱）")
 if st.button("🔍 开始抓取"):
     if not user or not pwd:
-        st.warning("请填邮箱+密码")
+        st.warning("请填写邮箱和密码")
     else:
         pb = st.progress(0)
         tx = st.empty()
         st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date, pb, tx)
-        st.success(f"✅ 完成：{len(st.session_state.mails)} 封")
+        st.success(f"✅ 抓取完成：{len(st.session_state.mails)} 封")
 
 if st.session_state.mails:
     with st.expander("查看邮件"):
@@ -246,7 +201,7 @@ if st.session_state.mails:
 st.subheader("2️⃣ 自动审核")
 if st.button("✅ 开始审核"):
     if not st.session_state.mails:
-        st.warning("先抓取")
+        st.warning("请先抓取邮件")
     else:
         admit = []
         reject = []
@@ -259,7 +214,7 @@ if st.button("✅ 开始审核"):
                 msg = mail["msg"]
 
                 if not sid or not name:
-                    reject.append({"学号":"未知","姓名":"未知","原因":"格式错"})
+                    reject.append({"学号":"未知","姓名":"未知","原因":"格式错误"})
                     continue
                 if sid in black:
                     reject.append({"学号":sid,"姓名":name,"原因":"黑名单"})
@@ -281,31 +236,31 @@ if st.button("✅ 开始审核"):
                 if not info["is_supported"]:
                     reject.append({"学号":sid,"姓名":name,"原因":"非资助对象"})
                 elif info["reason_length"] < 95:
-                    reject.append({"学号":sid,"姓名":name,"原因":f"字数不足({info['reason_length']})"})
+                    reject.append({"学号":sid,"姓名":name,"原因":"字数不足"})
                 else:
-                    admit.append({"学号":sid,"姓名":name,"结果":"通过"})
+                    admit.append({"学号":sid,"姓名":name,"结果":"审核通过"})
 
         st.session_state.admitted = admit
         st.session_state.rejected = reject
-        st.success(f"🎯 录取 {len(admit)}｜拒绝 {len(reject)}")
+        st.success(f"🎯 录取 {len(admit)} 人｜拒绝 {len(reject)} 人")
 
 # --------------------------
 # 下载
 # --------------------------
-st.subheader("3️⃣ 导出")
+st.subheader("3️⃣ 导出名单")
 if st.session_state.admitted or st.session_state.rejected:
-    t1, t2 = st.tabs(["录取", "拒绝"])
+    t1, t2 = st.tabs(["✅ 录取名单", "❌ 拒绝名单"])
     with t1:
         dfa = pd.DataFrame(st.session_state.admitted)
         st.dataframe(dfa, use_container_width=True)
         out = BytesIO()
         with pd.ExcelWriter(out, engine="openpyxl") as w:
             dfa.to_excel(w, index=False)
-        st.download_button("下载录取", out.getvalue(), "录取.xlsx")
+        st.download_button("下载录取名单", out.getvalue(), "录取名单.xlsx")
     with t2:
         dfr = pd.DataFrame(st.session_state.rejected)
         st.dataframe(dfr, use_container_width=True)
         out2 = BytesIO()
         with pd.ExcelWriter(out2, engine="openpyxl") as w:
             dfr.to_excel(w, index=False)
-        st.download_button("下载拒绝", out2.getvalue(), "拒绝.xlsx")
+        st.download_button("下载拒绝名单", out2.getvalue(), "拒绝名单.xlsx")
