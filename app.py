@@ -205,7 +205,7 @@ with st.sidebar:
     start_date = st.date_input("开始日期", datetime(2026,3,1))
     end_date = st.date_input("截止日期", datetime(2026,4,10))
 
-    st.mark("---")
+    st.markdown("---")
     st.header("📋 名单上传")
     f_hongji = st.file_uploader("新鸿基学生名单", type="xlsx")
     f_last = st.file_uploader("去年已参加名单", type="xlsx")
