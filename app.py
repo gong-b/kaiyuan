@@ -9,10 +9,10 @@ from email.message import Message
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta
-from pathlib import Path
 from docx import Document
 import tempfile
 import os
+from io import BytesIO
 
 # 页面配置
 st.set_page_config(
@@ -85,7 +85,6 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
             conn.login(user, pwd)
             conn.select("INBOX")
             
-            # 构造日期范围：SINCE 开始日期 BEFORE 结束日期+1天
             since_str = start_date.strftime("%d-%b-%Y")
             before_date = end_date + timedelta(days=1)
             before_str = before_date.strftime("%d-%b-%Y")
@@ -105,11 +104,17 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
                     subject = decode_subject(msg)
                     recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
                     
-                    # 二次精确过滤时间（防止IMAP搜索误差）
                     if recv_time:
                         mail_dt = recv_time.date()
                         if not (start_date <= mail_dt <= end_date):
                             continue
+
+                    # --------------------------
+                    # ✅ 关键过滤：只保留报名邮件
+                    # --------------------------
+                    subject_lower = subject.replace(" ", "").replace("　", "")
+                    if "开源课堂" not in subject and "报名" not in subject:
+                        continue
                     
                     name, sid = parse_name_id(subject)
                     mails.append({
@@ -174,7 +179,7 @@ with st.sidebar:
     imap = st.text_input("IMAP 服务器", "imap.zju.edu.cn")
     port = st.number_input("端口", value=993)
     user = st.text_input("浙大邮箱")
-    pwd = st.text_input("客户端密码", type="password")
+    pwd = st.textInput("客户端密码", type="password")
 
     st.markdown("---")
     st.header("📅 报名时间范围")
@@ -236,7 +241,6 @@ if st.button("✅ 开始自动审核"):
                     reject.append({"学号": "未知", "姓名": "未知", "原因": "邮件主题格式错误"})
                     continue
 
-                # 审核逻辑
                 if sid in black_ids:
                     reject.append({"学号": sid, "姓名": name, "原因": "黑名单"})
                     continue
@@ -247,7 +251,6 @@ if st.button("✅ 开始自动审核"):
                     admit.append({"学号": sid, "姓名": name, "审核结果": "新鸿基直接录取"})
                     continue
 
-                # 附件解析
                 att_path = os.path.join(tmp_dir, f"{sid}")
                 attachments = save_attachments(msg, att_path)
                 docx_files = [f for f in attachments if f.endswith(".docx")]
@@ -269,7 +272,7 @@ if st.button("✅ 开始自动审核"):
         st.success(f"🎯 审核完成：录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
 
 # --------------------------
-# 结果展示 + 下载
+# 结果展示 + 修复下载功能
 # --------------------------
 st.subheader("3️⃣ 审核结果与导出")
 if st.session_state.admitted or st.session_state.rejected:
@@ -277,19 +280,22 @@ if st.session_state.admitted or st.session_state.rejected:
     with tab1:
         df_admit = pd.DataFrame(st.session_state.admitted)
         st.dataframe(df_admit, use_container_width=True)
-        st.download_button(
-            label="📥 下载录取名单",
-            data=df_admit.to_excel(index=False),
-            file_name="录取名单.xlsx"
-        )
+        
+        # ✅ 修复下载
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_admit.to_excel(writer, index=False)
+        st.download_button("📥 下载录取名单", output.getvalue(), "录取名单.xlsx")
+
     with tab2:
         df_reject = pd.DataFrame(st.session_state.rejected)
         st.dataframe(df_reject, use_container_width=True)
-        st.download_button(
-            label="📥 下载拒绝名单",
-            data=df_reject.to_excel(index=False),
-            file_name="拒绝名单.xlsx"
-        )
+        
+        # ✅ 修复下载
+        output2 = BytesIO()
+        with pd.ExcelWriter(output2, engine='openpyxl') as writer:
+            df_reject.to_excel(writer, index=False)
+        st.download_button("📥 下载拒绝名单", output2.getvalue(), "拒绝名单.xlsx")
 else:
     st.info("点击「开始自动审核」查看结果")
 
