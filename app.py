@@ -86,9 +86,7 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
             status_text.text("登录中...")
             conn.login(user, pwd)
 
-            # ==============================================
-            # 🔥 强制直接打开【开源课堂】文件夹（浙大邮箱专用）
-            # ==============================================
+            # 🔥 强制直接打开【开源课堂】文件夹
             status_text.text("打开文件夹：开源课堂")
             conn.select('"开源课堂"', readonly=True)
 
@@ -168,8 +166,9 @@ def load_ids(uploaded):
     if not uploaded:
         return set()
     df = pd.read_excel(uploaded)
-    col = next((c for c in df.columns if "学号" in str(c)), df.columns[0])
-    return set(df[col].astype(str).strip())
+    col = next((c for c in df.columns if "学号" in c), df.columns[0])
+    # ✅ 修复：pandas 列正确去除空格
+    return set(df[col].astype(str).str.strip().tolist())
 
 # --------------------------
 # 状态
