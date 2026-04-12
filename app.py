@@ -24,7 +24,7 @@ st.set_page_config(
 st.title("📧 浙江大学开源课堂报名自动审核系统")
 
 # --------------------------
-# 工具函数（修复版，带超时+进度）
+# 工具函数（适配自定义文件夹+超时+进度）
 # --------------------------
 def decode_subject(msg: Message) -> str:
     decoded_parts = []
@@ -78,7 +78,22 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
-def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar, status_text):
+def list_mailboxes(conn):
+    """获取邮箱所有文件夹列表"""
+    status, data = conn.list()
+    if status != "OK":
+        return []
+    mailboxes = []
+    for line in data:
+        if not line:
+            continue
+        parts = line.decode().split('" "')
+        if len(parts) >= 2:
+            mb = parts[-1].strip('"')
+            mailboxes.append(mb)
+    return mailboxes
+
+def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, progress_bar, status_text):
     mails = []
     ctx = ssl.create_default_context()
     try:
@@ -86,7 +101,13 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
         with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
             status_text.text("正在登录邮箱...")
             conn.login(user, pwd)
-            conn.select("INBOX")
+            
+            # ✅ 选择指定文件夹（默认开源课堂，兼容收件箱）
+            status_text.text(f"正在打开文件夹：{mailbox}")
+            status, _ = conn.select(mailbox, readonly=True)
+            if status != "OK":
+                st.error(f"无法打开文件夹 {mailbox}，请检查文件夹名称")
+                return mails
             
             # ✅ 优化日期搜索，避免服务器异常
             since_str = start_date.strftime("%d-%b-%Y")
@@ -121,9 +142,9 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
                         if not (start_date <= mail_dt <= end_date):
                             continue
 
-                    # ✅ 严格过滤报名邮件
+                    # ✅ 严格过滤报名邮件（适配你的邮件主题）
                     subject_clean = subject.replace(" ", "").replace("　", "")
-                    if "开源课堂" not in subject_clean and "报名" not in subject_clean:
+                    if "报名申请" not in subject_clean and "报名名单申请" not in subject_clean:
                         continue
                     
                     name, sid = parse_name_id(subject)
@@ -185,9 +206,11 @@ if "admitted" not in st.session_state:
     st.session_state.admitted = []
 if "rejected" not in st.session_state:
     st.session_state.rejected = []
+if "mailboxes" not in st.session_state:
+    st.session_state.mailboxes = []
 
 # --------------------------
-# 侧边栏配置
+# 侧边栏配置（新增文件夹选择）
 # --------------------------
 with st.sidebar:
     st.header("⚙️ 邮箱配置")
@@ -196,9 +219,29 @@ with st.sidebar:
     user = st.text_input("浙大邮箱")
     pwd = st.text_input("客户端密码", type="password")
 
+    # ✅ 新增：获取并选择邮件文件夹
+    if st.button("🔄 获取邮箱文件夹"):
+        if not user or not pwd:
+            st.warning("请先填写邮箱和密码")
+        else:
+            try:
+                ctx = ssl.create_default_context()
+                with imaplib.IMAP4_SSL(imap, port, ssl_context=ctx, timeout=30) as conn:
+                    conn.login(user, pwd)
+                    st.session_state.mailboxes = list_mailboxes(conn)
+                    st.success(f"✅ 成功获取 {len(st.session_state.mailboxes)} 个文件夹")
+            except Exception as e:
+                st.error(f"获取文件夹失败：{str(e)}")
+
+    if st.session_state.mailboxes:
+        # ✅ 默认选中「开源课堂」文件夹，适配你的需求
+        default_idx = st.session_state.mailboxes.index("开源课堂") if "开源课堂" in st.session_state.mailboxes else 0
+        mailbox = st.selectbox("选择邮件文件夹", st.session_state.mailboxes, index=default_idx)
+    else:
+        mailbox = st.text_input("手动输入文件夹名称", value="开源课堂")
+
     st.markdown("---")
     st.header("📅 报名时间范围")
-    # ✅ 默认设置合理的日期范围，避免用户误设同一天
     start_date = st.date_input("开始日期", datetime(2026,3,1))
     end_date = st.date_input("截止日期", datetime(2026,4,1))
 
@@ -221,7 +264,7 @@ black_ids = load_ids(f_black)
 # 抓取邮件（带进度）
 # --------------------------
 st.subheader("1️⃣ 抓取报名邮件")
-st.caption(f"当前抓取范围：{start_date} ~ {end_date}")
+st.caption(f"当前抓取范围：{start_date} ~ {end_date} | 文件夹：{mailbox}")
 if st.button("🔍 开始抓取邮件"):
     if not user or not pwd:
         st.warning("请填写完整的浙大邮箱和客户端密码")
@@ -230,7 +273,7 @@ if st.button("🔍 开始抓取邮件"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         with st.spinner("正在连接邮箱..."):
-            st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date, progress_bar, status_text)
+            st.session_state.mails = fetch_emails(imap, port, user, pwd, mailbox, start_date, end_date, progress_bar, status_text)
         st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封报名邮件")
 
 if st.session_state.mails:
