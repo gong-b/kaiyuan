@@ -40,9 +40,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------- 正则表达式 ----------------------
+# ---------------------- 正则表达式（核心修复：转义特殊字符） ----------------------
+# 修复点：将 +—- 等特殊字符转义，避免被解析为字符范围
 SUBJECT_PATTERN = re.compile(
-    r"^\s*[()（）\[\]【】\{\}｛｝]*([\u4e00-\u9fa5]{2,4})\s*[+＋-—\s]*(\d{8,12})\s*[+＋-—\s]*书法班报名申请[()（）\[\]【】\{\}｛｝]*\s*$",
+    r"^\s*[()（）\[\]【】\{\}｛｝]*([\u4e00-\u9fa5]{2,4})\s*[\+＋\-—\s]*(\d{8,12})\s*[\+＋\-—\s]*书法班报名申请[()（）\[\]【】\{\}｛｝]*\s*$",
     re.IGNORECASE
 )
 
@@ -204,6 +205,7 @@ class SecureIMAPClient:
                     continue
 
                 # 解析为Message对象
+                from email import message_from_bytes  # 修复：补充缺失的导入
                 msg = message_from_bytes(raw_email)
                 
                 # 过滤书法班邮件
