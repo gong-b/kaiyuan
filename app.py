@@ -88,7 +88,6 @@ def fetch_emails(imap_host, port, user, pwd, mailbox, start_date, end_date, prog
             status_text.text("正在登录邮箱...")
             conn.login(user, pwd)
             
-            # 🔥 关键修复：中文文件夹 UTF7 编码
             encoded_mailbox = utf7_encode(mailbox)
             status_text.text(f"正在打开文件夹：{mailbox}")
             conn.select(encoded_mailbox, readonly=True)
@@ -286,9 +285,9 @@ if st.button("✅ 开始审核"):
                 else:
                     admit.append({"学号": sid, "姓名": name, "结果": "审核通过"})
 
-        st.session_state.admitted = admit
-        st.session_state.rejected = reject
-        st.success(f"🎯 录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
+    st.session_state.admitted = admit
+    st.session_state.rejected = reject
+    st.success(f"🎯 录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
 
 # --------------------------
 # 下载
