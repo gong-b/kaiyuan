@@ -609,5 +609,6 @@ def main():
                 pass
         raise RuntimeError(f"未预期异常：{str(e)}") from e
 
+# ✅ 核心修复：删除多余括号和无效字符，仅保留正确的函数调用
 if __name__ == "__main__":
-    main)vv
+    main()
