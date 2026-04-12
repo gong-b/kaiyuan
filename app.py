@@ -77,6 +77,21 @@ def parse_docx(filepath: str) -> dict:
         pass
     return result
 
+# --------------------------
+# 🔥 核心修复：IMAP UTF-7 编码（浙大邮箱中文专用）
+# --------------------------
+def imap_utf7_encode(s):
+    import binascii
+    res = []
+    for c in s:
+        if ord(c) < 128 and c != '&':
+            res.append(c)
+        elif c == '&':
+            res.append('&-')
+        else:
+            res.append('&' + binascii.b2a_base64(c.encode('utf-16be')).decode().strip() + '-')
+    return ''.join(res)
+
 def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar, status_text):
     mails = []
     ctx = ssl.create_default_context()
@@ -86,11 +101,15 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
             status_text.text("登录中...")
             conn.login(user, pwd)
 
-            # 🔥 强制直接打开【开源课堂】文件夹
-            status_text.text("打开文件夹：开源课堂")
-            conn.select('"开源课堂"', readonly=True)
+            # ==============================================
+            # ✅ 终极修复：中文文件夹「开源课堂」编码
+            # ==============================================
+            folder_name = "开源课堂"
+            encoded_folder = imap_utf7_encode(folder_name)
+            status_text.text(f"打开文件夹：{folder_name}")
+            conn.select(encoded_folder, readonly=True)
 
-            # 日期搜索
+            # 搜索邮件
             since = start_date.strftime("%d-%b-%Y")
             before = (end_date + timedelta(1)).strftime("%d-%b-%Y")
             status_text.text("搜索邮件...")
@@ -115,7 +134,6 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date, progress_bar,
                     subject = decode_subject(msg)
                     recv_time = parsedate_to_datetime(msg.get("Date")) if msg.get("Date") else None
 
-                    # 过滤报名邮件
                     sub_clean = subject.replace(" ", "").replace("　", "")
                     if "报名" not in sub_clean and "开源课堂" not in sub_clean:
                         continue
@@ -167,7 +185,6 @@ def load_ids(uploaded):
         return set()
     df = pd.read_excel(uploaded)
     col = next((c for c in df.columns if "学号" in c), df.columns[0])
-    # ✅ 修复：pandas 列正确去除空格
     return set(df[col].astype(str).str.strip().tolist())
 
 # --------------------------
@@ -208,7 +225,7 @@ black = load_ids(f_black)
 # --------------------------
 # 抓取
 # --------------------------
-st.subheader("1️⃣ 抓取邮件（自动从【开源课堂】文件夹读取）")
+st.subheader("1️⃣ 抓取邮件（自动从【开源课堂】读取）")
 if st.button("🔍 开始抓取"):
     if not user or not pwd:
         st.warning("请填邮箱+密码")
