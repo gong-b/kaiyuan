@@ -1,5 +1,4 @@
 import logging
-import pdfkit
 import re
 import os
 from pathlib import Path
@@ -8,14 +7,14 @@ from email.message import Message
 from typing import Optional, List
 from config import PDF_DIR
 
+# 完全删除 pdfkit 相关导入！！
 logger = logging.getLogger(__name__)
 
 class EmailProcessor:
-    """邮件处理类（适配跨平台）"""
-
+    """邮件处理类（仅保留附件提取，彻底删除PDF功能）"""
     def __init__(self) -> None:
-        # 完全不加载 pdfkit，避免报错
-        self.pdf_config = None
+        # 啥都不做，彻底避开PDF初始化
+        pass
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
@@ -24,11 +23,12 @@ class EmailProcessor:
         return re.sub(illegal_chars, "_", name).strip()
 
     def save_email_pdf(self, msg: Message, student_id: str, name: str) -> Optional[Path]:
-        """关闭 PDF 功能，避免 wkhtmltopdf 报错"""
+        """彻底关闭PDF生成，直接返回None"""
+        logger.info("PDF生成功能已关闭（避免wkhtmltopdf报错）")
         return None
 
     def save_attachments(self, msg: Message, student_id: str, name: str) -> List[Path]:
-        """保存邮件附件（增强容错）"""
+        """保存邮件附件（仅保留核心逻辑，增强容错）"""
         attachments = []
         try:
             safe_name = self.sanitize_filename(name)
