@@ -109,11 +109,9 @@ def fetch_emails(imap_host, port, user, pwd, start_date, end_date):
                         if not (start_date <= mail_dt <= end_date):
                             continue
 
-                    # --------------------------
-                    # ✅ 关键过滤：只保留报名邮件
-                    # --------------------------
-                    subject_lower = subject.replace(" ", "").replace("　", "")
-                    if "开源课堂" not in subject and "报名" not in subject:
+                    # 过滤：只抓开源课堂报名邮件
+                    subject_clean = subject.replace(" ", "").replace("　", "")
+                    if "开源课堂" not in subject_clean and "报名" not in subject_clean:
                         continue
                     
                     name, sid = parse_name_id(subject)
@@ -179,7 +177,7 @@ with st.sidebar:
     imap = st.text_input("IMAP 服务器", "imap.zju.edu.cn")
     port = st.number_input("端口", value=993)
     user = st.text_input("浙大邮箱")
-    pwd = st.textInput("客户端密码", type="password")
+    pwd = st.text_input("客户端密码", type="password")
 
     st.markdown("---")
     st.header("📅 报名时间范围")
@@ -207,7 +205,7 @@ if st.button("🔍 开始抓取邮件"):
     else:
         with st.spinner("正在抓取邮件..."):
             st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date)
-        st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封邮件")
+        st.success(f"✅ 抓取完成，共找到 {len(st.session_state.mails)} 封报名邮件")
 
 if st.session_state.mails:
     with st.expander("查看抓取到的邮件列表"):
@@ -272,7 +270,7 @@ if st.button("✅ 开始自动审核"):
         st.success(f"🎯 审核完成：录取 {len(admit)} 人 | 拒绝 {len(reject)} 人")
 
 # --------------------------
-# 结果展示 + 修复下载功能
+# 结果展示 + 正常下载
 # --------------------------
 st.subheader("3️⃣ 审核结果与导出")
 if st.session_state.admitted or st.session_state.rejected:
@@ -281,7 +279,6 @@ if st.session_state.admitted or st.session_state.rejected:
         df_admit = pd.DataFrame(st.session_state.admitted)
         st.dataframe(df_admit, use_container_width=True)
         
-        # ✅ 修复下载
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_admit.to_excel(writer, index=False)
@@ -291,7 +288,6 @@ if st.session_state.admitted or st.session_state.rejected:
         df_reject = pd.DataFrame(st.session_state.rejected)
         st.dataframe(df_reject, use_container_width=True)
         
-        # ✅ 修复下载
         output2 = BytesIO()
         with pd.ExcelWriter(output2, engine='openpyxl') as writer:
             df_reject.to_excel(writer, index=False)
