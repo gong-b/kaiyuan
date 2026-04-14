@@ -1,20 +1,24 @@
-# -*- coding: utf-8 -*-
-# 全局配置文件
+from pathlib import Path
+import os
 
-# 邮箱配置
-IMAP_SERVER = "imap.zju.edu.cn"
-IMAP_PORT = 993
+# 邮箱配置（优先读取环境变量，兼容原有硬编码）
+IMAP_HOST = os.environ.get("IMAP_HOST", "imap.zju.edu.cn")
+IMAP_PORT = int(os.environ.get("IMAP_PORT", 993))
+EMAIL_USER = os.environ.get("EMAIL_USER", "zzbgs@zju.edu.cn")  # 环境变量优先
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "ww9SVyi9ixmhnqu3")  # 环境变量优先
 
-# 文件夹配置（浙大邮箱路径，已适配子文件夹）
-MAIL_FOLDER = "其他文件夹/开源课堂"  # 你的真实文件夹路径
-FALLBACK_FOLDER = "INBOX"  # 备用：收件箱
+# 文件路径配置
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True, parents=True)
 
-# 时间配置
-DEFAULT_START_DATE = "2026-03-01"
-DEFAULT_END_DATE = "2026-04-10"
+# Excel文件路径
+NEW_HONGJI_FILE = DATA_DIR / "2024-2025学年秋冬学期新鸿基推荐学生名单.xlsx"
+LAST_YEAR_FILE = DATA_DIR / "24秋冬学期开源课堂人员名单.xlsx"
 
-# 审核规则配置
-MIN_REASON_LENGTH = 95  # 申请理由最低字数
+# 输出文件
+ADMITTED_FILE = DATA_DIR / "admitted_students.xlsx"
+REJECTED_FILE = DATA_DIR / "rejected_students.xlsx"
 
-# 过滤关键词
-MAIL_KEYWORDS = ["报名", "开源课堂"]  # 只保留包含这些关键词的邮件
+# PDF存储路径
+PDF_DIR = DATA_DIR / "pdfs"
+PDF_DIR.mkdir(exist_ok=True, parents=True)
