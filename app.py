@@ -1,109 +1,113 @@
 # -*- coding: utf-8 -*-
+# Streamlit 入口：页面UI，调用主逻辑
 import streamlit as st
-import pandas as pd
-import re
-import imaplib
-import ssl
-from email import message_from_bytes
-from email.header import decode_header
-from datetime import datetime, timedelta
-from docx import Document
-import tempfile
-import os
-from io import BytesIO
+from datetime import datetime
+from main import KaiYuanAuditSystem
+from config import DEFAULT_START_DATE, DEFAULT_END_DATE
 
 # 页面配置
-st.set_page_config(page_title="邮箱抓取工具", page_icon="📧", layout="wide")
-st.title("📧 开源课堂邮件抓取工具")
+st.set_page_config(
+    page_title="浙江大学开源课堂报名自动审核系统",
+    page_icon="📧",
+    layout="wide"
+)
+st.title("📧 浙江大学开源课堂报名自动审核系统")
+
+# 初始化系统（单例）
+if "audit_system" not in st.session_state:
+    st.session_state.audit_system = KaiYuanAuditSystem()
+audit_system = st.session_state.audit_system
 
 # --------------------------
-# 🔥 强制打开【收件箱】INBOX —— 100% 能打开
-# --------------------------
-def fetch_emails(imap_host, port, user, pwd, start_date, end_date, pb, status_text):
-    mails = []
-    ctx = ssl.create_default_context()
-    try:
-        with imaplib.IMAP4_SSL(imap_host, port, ssl_context=ctx, timeout=30) as conn:
-            conn.login(user, pwd)
-
-            # --------------------------
-            # ✅ 只打开收件箱，永远不报错
-            # --------------------------
-            conn.select("INBOX", readonly=True)
-
-            # 搜索时间范围
-            since = start_date.strftime("%d-%b-%Y")
-            before = (end_date + timedelta(1)).strftime("%d-%b-%Y")
-            res, data = conn.uid('SEARCH', None, 'SINCE', since, 'BEFORE', before)
-
-            # 抓取所有邮件
-            uids = data[0].split()
-            total = len(uids)
-            for i, uid in enumerate(uids):
-                pb.progress((i+1)/total)
-                try:
-                    _, dat = conn.uid('FETCH', uid, '(RFC822)')
-                    msg = message_from_bytes(dat[0][1])
-                    subject = decode_subject(msg)
-                    mails.append({
-                        "sid": "",
-                        "name": "",
-                        "subject": subject,
-                        "msg": msg
-                    })
-                except:
-                    continue
-        return mails
-    except Exception as e:
-        st.error(f"错误：{str(e)}")
-        return []
-
-def decode_subject(msg):
-    try:
-        return "".join(
-            part.decode(charset or "utf-8", "replace")
-            for part, charset in decode_header(msg.get("Subject", ""))
-        )
-    except:
-        return ""
-
-def load_ids(uploaded):
-    if not uploaded: return set()
-    df = pd.read_excel(uploaded)
-    col = next((c for c in df.columns if "学号" in str(c)), df.columns[0])
-    return set(df[col].astype(str).str.strip().tolist())
-
-# --------------------------
-# 全局状态
-# --------------------------
-if "mails" not in st.session_state:
-    st.session_state.mails = []
-
-# --------------------------
-# 侧边栏
+# 侧边栏：配置区
 # --------------------------
 with st.sidebar:
-    imap = st.text_input("IMAP", "imap.zju.edu.cn")
-    port = 993
-    user = st.text_input("邮箱账号")
+    st.header("⚙️ 邮箱配置")
+    user = st.text_input("浙大邮箱")
     pwd = st.text_input("客户端密码", type="password")
-    start_date = st.date_input("开始日期", datetime(2026,3,1))
-    end_date = st.date_input("结束日期", datetime(2026,4,15))
+
+    st.markdown("---")
+    st.header("📅 时间范围")
+    start_date = st.date_input("开始日期", datetime.strptime(DEFAULT_START_DATE, "%Y-%m-%d"))
+    end_date = st.date_input("截止日期", datetime.strptime(DEFAULT_END_DATE, "%Y-%m-%d"))
+
+    st.markdown("---")
+    st.header("📋 名单上传")
+    f_hongji = st.file_uploader("新鸿基名单", type="xlsx")
+    f_last = st.file_uploader("去年已参加名单", type="xlsx")
+    f_black = st.file_uploader("黑名单", type="xlsx")
+
+    # 加载名单按钮
+    if st.button("📥 加载名单"):
+        if audit_system.load_lists(f_hongji, f_last, f_black):
+            st.success("✅ 名单加载完成")
 
 # --------------------------
-# 抓取
+# 主页面：功能区
 # --------------------------
-st.subheader("1️⃣ 抓取邮件（只抓收件箱，100%成功）")
-if st.button("🚀 开始抓取"):
+# 1. 抓取邮件
+st.subheader("1️⃣ 抓取报名邮件")
+if st.button("🔍 开始抓取邮件"):
     if not user or not pwd:
-        st.warning("请输入邮箱和密码")
+        st.warning("⚠️ 请填写完整的浙大邮箱和客户端密码")
     else:
-        pb = st.progress(0)
-        tx = st.empty()
-        st.session_state.mails = fetch_emails(imap, port, user, pwd, start_date, end_date, pb, tx)
-        st.success(f"✅ 抓取完成：共 {len(st.session_state.mails)} 封")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        status, msg = audit_system.fetch_mails(
+            user, pwd, start_date, end_date, progress_bar, status_text
+        )
+        if status:
+            st.success(msg)
+        else:
+            st.error(msg)
+        progress_bar.empty()
+        status_text.empty()
 
-if st.session_state.mails:
-    with st.expander("📩 查看所有抓到的邮件标题"):
-        for mail in st.session_state.mails:
-            st.write(mail["subject"])
+# 展示抓取到的邮件
+if audit_system.filtered_mails:
+    with st.expander("📋 查看抓取到的报名邮件"):
+        mail_list = [{
+            "学号": m["sid"] or "未知",
+            "姓名": m["name"] or "未知",
+            "邮件主题": m["subject"]
+        } for m in audit_system.filtered_mails]
+        st.dataframe(mail_list, use_container_width=True)
+
+# 2. 自动审核
+st.subheader("2️⃣ 自动审核报名")
+if st.button("✅ 开始自动审核"):
+    if not audit_system.filtered_mails:
+        st.warning("⚠️ 请先抓取邮件")
+    else:
+        with st.spinner("🔍 正在审核中..."):
+            status, msg = audit_system.audit_mails()
+            if status:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+# 3. 结果导出
+st.subheader("3️⃣ 审核结果与导出")
+if audit_system.admit_list or audit_system.reject_list:
+    tab1, tab2 = st.tabs(["✅ 录取名单", "❌ 拒绝名单"])
+    with tab1:
+        st.dataframe(audit_system.admit_list, use_container_width=True)
+        admit_data, _ = audit_system.export_results()[0]
+        st.download_button(
+            label="📥 下载录取名单",
+            data=admit_data,
+            file_name="录取名单.xlsx"
+        )
+    with tab2:
+        st.dataframe(audit_system.reject_list, use_container_width=True)
+        reject_data, _ = audit_system.export_results()[1]
+        st.download_button(
+            label="📥 下载拒绝名单",
+            data=reject_data,
+            file_name="拒绝名单.xlsx"
+        )
+else:
+    st.info("ℹ️ 点击「开始自动审核」查看结果")
+
+st.markdown("---")
+st.caption("审核规则：新鸿基直接录取 → 黑名单/去年参加过 → 拒绝 → 非资助对象 → 拒绝 → 理由<95字 → 拒绝")
