@@ -29,60 +29,52 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-# 正则表达式：匹配可能被括号包裹的姓名+学号+书法班报名申请
-SUBJECT_PATTERN = re.compile(
-    r"^\s*"
-    r"([()（）\[\]【】\{\}｛｝])?"
-    r"([\u4e00-\u9fa5]{2,})"
-    r"\s*"
-    r"[+＋-]?"
-    r"(\d+)"
-    r"\s*"
-    r"[+＋-]?"
-    r"书法班报名申请"
-    r"([)）\]\】\}\｝])?"
-    r"\s*$"
-)
-
 logger = logging.getLogger(__name__)
 logger.addFilter(SafeLogFilter())
 
-def parse_subject_pattern(subject: str) -> tuple[str,str]|tuple[None,None]:
-    """强化版主题解析，匹配指定的格式"""
+def parse_subject_pattern(subject: str) -> tuple[str, str] | tuple[None, None]:
+    """
+    放宽版主题解析：
+    1. 允许空格和任意干扰字符
+    2. 提取连续2-4位的中文作为姓名
+    3. 提取连续的数字作为学号
+    4. 只要包含 '报名' 或 '申请' 即可
+    """
+    # 移除所有空格
     clean_subject = re.sub(r"\s+", "", subject)
-    match = SUBJECT_PATTERN.search(clean_subject)
-    if match:
-        return (match.group(2), match.group(3))
-    return (None, None)
+    
+    # 提取学号 (一般为8-10位数字)
+    id_match = re.search(r"(\d{6,12})", clean_subject)
+    # 提取姓名 (2-4位中文)
+    name_match = re.search(r"([\u4e00-\u9fa5]{2,4})", clean_subject)
+    
+    # 检查是否包含核心关键字（容错：只要有报名或申请字样）
+    is_valid_type = any(kw in clean_subject for kw in ["报名", "申请", "书法", "班"])
+
+    if id_match and name_match and is_valid_type:
+        return name_match.group(1), id_match.group(1)
+    
+    return None, None
 
 def parse_subject(msg: Message) -> str:
     """安全解码邮件主题"""
     decoded_parts: list[str] = []
     for part, charset in decode_header(msg.get("Subject", "")):
         try:
-            if charset:
-                decoded = part.decode(charset, errors='replace')
-            else:
-                for encoding in ['utf-8', 'gb18030', 'big5']:
-                    try:
-                        decoded = part.decode(encoding)
-                        break
-                    except:
-                        continue
+            if isinstance(part, bytes):
+                if charset:
+                    decoded = part.decode(charset, errors='replace')
                 else:
                     decoded = part.decode('utf-8', errors='replace')
+            else:
+                decoded = str(part)
             decoded_parts.append(decoded)
-        except Exception as e:
-            logger.warning(f"主题解码异常: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
+        except Exception:
             decoded_parts.append("[解码失败]")
     return "".join(decoded_parts)
 
 def main():
-    """主处理流程"""
     email_processor = EmailProcessor()
-
-    # 读取基础数据
     new_hongji = read_student_list(str(NEW_HONGJI_FILE))
     last_year = read_student_list(str(LAST_YEAR_FILE))
 
@@ -90,7 +82,6 @@ def main():
     rejected: list[dict[str, str]] = []
     candidates: list[tuple[str, str, datetime]] = []
 
-    # 修复：从环境变量读取日期
     try:
         start_date_str = os.environ.get("START_DATE", "01-Mar-2025")
         start_date = datetime.strptime(start_date_str, "%d-%b-%Y")
@@ -100,105 +91,74 @@ def main():
     try:
         with SecureIMAPClient() as client:
             for uid, msg in client.fetch_emails():
-                # 获取邮件接收时间
+                # 1. 时间校验
                 try:
                     date_str = msg.get("Date")
                     recv_date = parsedate_to_datetime(date_str)
-                except Exception as e:
-                    logger.error(f"日期解析失败: {e}")
+                except:
                     continue
 
                 if recv_date is None or recv_date < start_date.replace(tzinfo=recv_date.tzinfo):
-                    logger.warning(f"邮件{uid}时间不符合要求：{recv_date}")
                     continue
 
-                subject = ""
-                try:
-                    subject = parse_subject(msg)
-                    name, student_id = parse_subject_pattern(subject)
-                except Exception as e:
-                    logger.error(f"主题解析失败: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
-                    student_id, name = None, None
+                # 2. 主题解析
+                subject = parse_subject(msg)
+                name, student_id = parse_subject_pattern(subject)
 
                 if not student_id or not name:
                     rejected.append({
-                        "学号": "未知",
-                        "姓名": "未知",
-                        "原主题": f"{subject}",
-                        "原因": "主题格式错误（正确示例：薛孜324011234书法班报名申请或者薛孜+3240101517+书法班报名申请）"
+                        "学号": "未知", "姓名": "未知", "原主题": subject,
+                        "原因": "主题格式无法识别（需包含姓名、学号及报名意图）"
                     })
                     continue
 
-                # 新鸿基直接录取
-                if student_id in new_hongji:
-                    admitted.append({"学号": student_id, "姓名": name, "备注": "新鸿基"})
-                    email_processor.save_email_pdf(msg, student_id, name)
-                    continue
-
-                # 去年已录取
-                if student_id in last_year:
-                    rejected.append({
-                        "学号": student_id,
-                        "姓名": name,
-                        "原因": "去年已录取"
-                    })
-                    continue
-
-                # 处理附件
+                # 3. 附件提取 (针对所有匹配成功的邮件，包括新鸿基人群)
+                # 这样做解决了特定人群被跳过附件提取的问题
                 attachments = email_processor.save_attachments(msg, student_id, name)
-                docx_files = [a for a in attachments if a.suffix == ".docx"]
-
-                if not docx_files:
-                    rejected.append({
-                        "学号": student_id,
-                        "姓名": name,
-                        "原因": "缺少DOCX附件"
-                    })
+                
+                # 4. 判定逻辑
+                # A. 去年已录取
+                if student_id in last_year:
+                    rejected.append({"学号": student_id, "姓名": name, "原因": "去年已录取"})
                     continue
 
-                # 解析DOCX
+                # B. 新鸿基人群 (直接录取，但已在上面保存了附件)
+                if student_id in new_hongji:
+                    admitted.append({"学号": student_id, "姓名": name, "备注": "新鸿基直接录取"})
+                    continue
+
+                # C. 普通候选人：检查DOCX附件
+                docx_files = [a for a in attachments if a.suffix.lower() == ".docx"]
+                if not docx_files:
+                    rejected.append({"学号": student_id, "姓名": name, "原因": "缺少DOCX报名表附件"})
+                    continue
+
+                # 解析DOCX内容
                 try:
                     docx_info = parse_docx(str(docx_files[0]))
                     if not docx_info["is_supported"]:
-                        rejected.append({
-                            "学号": student_id,
-                            "姓名": name,
-                            "原因": "非资助对象"
-                        })
+                        rejected.append({"学号": student_id, "姓名": name, "原因": "非资助对象"})
                     elif docx_info["reason_length"] < 95:
-                        rejected.append({
-                            "学号": student_id,
-                            "姓名": name,
-                            "原因": f"申请理由不足（{docx_info['reason_length']}字）"
-                        })
+                        rejected.append({"学号": student_id, "姓名": name, "原因": f"申请理由字数不足({docx_info['reason_length']})"})
                     else:
                         candidates.append((student_id, name, recv_date))
-                except Exception as e:
-                    rejected.append({
-                        "学号": student_id,
-                        "姓名": name,
-                        "原因": "附件解析失败"
-                    })
+                except:
+                    rejected.append({"学号": student_id, "姓名": name, "原因": "附件解析失败"})
 
-        # 处理候补名单
+        # 处理名额限制
         remaining = 25 - len(admitted)
         if remaining > 0:
-            candidates.sort(key=lambda x: x[2])
+            candidates.sort(key=lambda x: x[2]) # 按时间先后排序
             for student_id, name, _ in candidates[:remaining]:
-                admitted.append({"学号": student_id, "姓名": name, "备注": "非新鸿基"})
+                admitted.append({"学号": student_id, "姓名": name, "备注": "择优录取"})
             for student_id, name, _ in candidates[remaining:]:
-                rejected.append({
-                    "学号": student_id,
-                    "姓名": name,
-                    "原因": "名额已满"
-                })
+                rejected.append({"学号": student_id, "姓名": name, "原因": "名额已满"})
 
-        # 保存结果
         save_results(admitted, rejected)
         logger.info(f"处理完成，录取{len(admitted)}人，拒绝{len(rejected)}人")
 
     except Exception as e:
-        logger.error(f"处理过程中发生严重错误: {e}", exc_info=True)
+        logger.error(f"严重错误: {e}", exc_info=True)
 
 if __name__ == "__main__":
     main()
