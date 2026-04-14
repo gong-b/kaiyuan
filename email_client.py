@@ -23,7 +23,7 @@ class SecureIMAPClient:
         self.port = IMAP_PORT
         self.user = EMAIL_USER
         self.password = EMAIL_PASSWORD
-        self.mailbox = "开源课堂"  # <--- 核心修改点：切换到开源课堂文件夹
+        self.mailbox = "其他文件夹/开源课堂"  # <--- 核心修改点：切换到开源课堂文件夹
         self.conn = None
 
     def __enter__(self) -> "SecureIMAPClient":
