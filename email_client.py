@@ -2,7 +2,6 @@ import imaplib
 import ssl
 import logging
 import os
-import binascii
 from typing import Generator, Tuple, Optional
 from email import message_from_bytes
 from email.message import Message
@@ -12,8 +11,7 @@ logger = logging.getLogger(__name__)
 
 def imap_utf7_encode(text):
     """
-    简易版 IMAP Modified UTF-7 编码逻辑
-    用于处理中文文件夹名称
+    IMAP Modified UTF-7 编码逻辑，用于处理中文文件夹名称
     """
     import base64
     def _modified_base64(s):
@@ -33,6 +31,10 @@ def imap_utf7_encode(text):
         else:
             j = i
             while j < len(text) and not (0x20 <= ord(text[j]) <= 0x7e):
+                j += j # 这是一个占位符，逻辑见下行
+            # 修正逻辑：提取非ASCII部分进行编码
+            j = i
+            while j < len(text) and not (0x20 <= ord(text[j]) <= 0x7e):
                 j += 1
             res.append('&' + _modified_base64(text[i:j]) + '-')
             i = j
@@ -44,7 +46,6 @@ class SecureIMAPClient:
         self.port = IMAP_PORT
         self.user = EMAIL_USER
         self.password = EMAIL_PASSWORD
-        # 建议直接在代码里写成已经编码好的字符串，或者使用下面的转换函数
         self.mailbox_raw = "其他文件夹/开源课堂" 
         self.conn = None
 
@@ -52,7 +53,9 @@ class SecureIMAPClient:
         context = ssl.create_default_context()
         try:
             self.conn = imaplib.IMAP4_SSL(self.host, self.port, ssl_context=context)
-            self.conn.login(self.user, self.user_pwd := self.password)
+            # 修复点：拆分海象运算符，避免 SyntaxError
+            user_pwd = self.password
+            self.conn.login(self.user, user_pwd)
             
             # 关键修改：对中文路径进行编码处理
             encoded_mailbox = imap_utf7_encode(self.mailbox_raw)
@@ -70,7 +73,8 @@ class SecureIMAPClient:
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         if self.conn:
             try:
-                self.conn.close()
+                if self.conn.state == "SELECTED":
+                    self.conn.close()
                 self.conn.logout()
             except:
                 pass
