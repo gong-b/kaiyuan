@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -11,3 +12,7 @@ REJECTED_FILE = DATA_DIR / "rejected_students.xlsx"
 
 IMAP_HOST = "imap.zju.edu.cn"
 IMAP_PORT = 993
+
+# 从环境变量读取，不写死
+EMAIL_USER = os.getenv("EMAIL_USER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
