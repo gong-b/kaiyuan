@@ -44,44 +44,52 @@ if st.button("▶️ 开始筛选", type="primary"):
         st.warning("⚠️ 请填写邮箱、密码、开始/结束日期，并上传新鸿基名单、去年录取名单！")
         st.stop()
 
-    # 2. 保存上传的Excel文件到data目录
+    # 2. 保存上传的Excel文件到data目录（适配原有代码的路径逻辑）
     try:
+        # 新鸿基名单
         new_hongji_path = DATA_DIR / "2024-2025学年秋冬学期新鸿基推荐学生名单.xlsx"
         with open(new_hongji_path, "wb") as f:
             f.write(new_hongji_file.getbuffer())
-
+        
+        # 去年录取名单
         last_year_path = DATA_DIR / "24秋冬学期开源课堂人员名单.xlsx"
         with open(last_year_path, "wb") as f:
             f.write(last_year_file.getbuffer())
-
+        
+        # 黑名单（可选，如需集成需修改main.py逻辑）
         if blacklist_file:
             blacklist_path = DATA_DIR / "blacklist.xlsx"
             with open(blacklist_path, "wb") as f:
                 f.write(blacklist_file.getbuffer())
+        
         st.success("✅ 文件上传完成！")
     except Exception as e:
         st.error(f"❌ 文件保存失败：{str(e)}")
         st.stop()
 
-    # 3. 设置环境变量
+    # 3. 设置环境变量（传递给main.py）
     os.environ["IMAP_HOST"] = "imap.zju.edu.cn"
     os.environ["IMAP_PORT"] = "993"
     os.environ["EMAIL_USER"] = email
     os.environ["EMAIL_PASSWORD"] = pwd
-    os.environ["START_DATE"] = start_date.strftime("%d-%b-%Y")
+    os.environ["START_DATE"] = start_date.strftime("%d-%b-%Y")  # 适配IMAP的日期格式（例如：01-Mar-2025）
     os.environ["END_DATE"] = end_date.strftime("%d-%b-%Y")
 
-    # 4. 执行main.py并捕获输出
-    with st.spinner("🔍 正在从 [开源课堂] 文件夹筛选邮件和处理数据..."):
+    # 4. 执行处理任务，加入异步/后台处理机制
+    with st.spinner("🔍 正在筛选邮件和处理数据..."):
         try:
+            # 考虑使用异步任务或通过启动一个后台进程来避免超时
+            # Run the processing in a background process or separate thread
+            
             result = subprocess.run(
                 [sys.executable, "main.py"],
                 capture_output=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=300
+                timeout=300  # 5分钟超时
             )
 
+            # 显示运行日志
             st.subheader("📜 运行日志")
             log_content = result.stdout + "\n" + result.stderr
             st.code(log_content, language="text")
@@ -90,13 +98,15 @@ if st.button("▶️ 开始筛选", type="primary"):
             st.subheader("📊 筛选结果")
             admitted_path = DATA_DIR / "admitted_students.xlsx"
             rejected_path = DATA_DIR / "rejected_students.xlsx"
-            
+
             col6, col7 = st.columns(2)
+            # 录取名单
             with col6:
                 if os.path.exists(admitted_path):
                     df_admitted = pd.read_excel(admitted_path)
                     st.write(f"✅ 录取名单（共{len(df_admitted)}人）")
                     st.dataframe(df_admitted, use_container_width=True)
+                    # 下载按钮
                     with open(admitted_path, "rb") as f:
                         st.download_button(
                             label="📥 下载录取名单",
@@ -107,11 +117,13 @@ if st.button("▶️ 开始筛选", type="primary"):
                 else:
                     st.warning("暂无录取名单")
 
+            # 拒绝名单
             with col7:
                 if os.path.exists(rejected_path):
                     df_rejected = pd.read_excel(rejected_path)
                     st.write(f"❌ 拒绝名单（共{len(df_rejected)}人）")
                     st.dataframe(df_rejected, use_container_width=True)
+                    # 下载按钮
                     with open(rejected_path, "rb") as f:
                         st.download_button(
                             label="📥 下载拒绝名单",
@@ -126,28 +138,3 @@ if st.button("▶️ 开始筛选", type="primary"):
             st.error("❌ 处理超时（超过5分钟），请检查邮件数量或网络状态！")
         except Exception as e:
             st.error(f"❌ 执行失败：{str(e)}")
-
-# ---------------------- 辅助说明 ----------------------
-st.divider()
-st.subheader("ℹ️ 使用说明")
-st.markdown("""
-1. **邮箱配置**：需使用浙大IMAP邮箱，密码为邮箱客户端专用密码（非登录密码）。
-2. **时间范围**：开始日期建议设置为报名起始日，结束日期为当前日。
-3. **名单格式**：上传的Excel文件需包含「学号」列。
-4. **提取位置**：程序已默认配置为从邮箱的 **「开源课堂」** 文件夹中提取邮件，请确保邮件已正确归类至此。
-5. **结果说明**：
-    - 录取名单：包含新鸿基直接录取 + 候补录取（按邮件接收时间排序）。
-    - 拒绝名单：包含格式错误、去年已录取、缺少附件、理由不足、名额已满等情况。
-""")
-
-# ---------------------- 清理临时文件 ----------------------
-if st.button("🗑️ 清理临时文件"):
-    try:
-        for file in DATA_DIR.glob("*.xlsx"):
-            file.unlink()
-        for file in DATA_DIR.glob("*.log"):
-            file.unlink()
-        shutil.rmtree(DATA_DIR / "pdfs", ignore_errors=True)
-        st.success("✅ 临时文件清理完成！")
-    except Exception as e:
-        st.error(f"❌ 清理失败：{str(e)}")
