@@ -7,14 +7,13 @@ from typing import Generator, Tuple, Optional
 from email import message_from_bytes
 from email.message import Message
 from config import IMAP_HOST, IMAP_PORT, EMAIL_USER, EMAIL_PASSWORD
+import asyncio
+import aioimaplib  # 需安装：pip install aioimaplib
 
 logger = logging.getLogger(__name__)
 
 def imap_utf7_encode(text):
-    """
-    修正后的 IMAP Modified UTF-7 编码逻辑
-    用于处理中文文件夹名称
-    """
+    """原有编码逻辑保留"""
     def _modified_base64(s):
         s_utf16 = s.encode('utf-16-be')
         return base64.b64encode(s_utf16).decode('ascii').rstrip('=').replace('/', ',')
@@ -37,43 +36,34 @@ def imap_utf7_encode(text):
             i = j
     return "".join(res)
 
-class SecureIMAPClient:
+class AsyncSecureIMAPClient:
     def __init__(self) -> None:
         self.host = IMAP_HOST
         self.port = IMAP_PORT
         self.user = EMAIL_USER
         self.password = EMAIL_PASSWORD
-        # 建议尝试方案 A: "开源课堂" (浙大邮箱常见情况)
-        # 建议尝试方案 B: "其他文件夹/开源课堂"
-        self.mailbox_raw = "开源课堂" 
+        self.mailbox_raw = "开源课堂"
         self.conn = None
 
-    def __enter__(self) -> "SecureIMAPClient":
+    async def __aenter__(self) -> "AsyncSecureIMAPClient":
         context = ssl.create_default_context()
         try:
-            self.conn = imaplib.IMAP4_SSL(self.host, self.port, ssl_context=context)
-            self.conn.login(self.user, self.password)
+            self.conn = aioimaplib.IMAP4_SSL(host=self.host, port=self.port, ssl_context=context)
+            await self.conn.wait_hello_from_server()
+            await self.conn.login(self.user, self.password)
             
-            # 编码路径
             encoded_mailbox = imap_utf7_encode(self.mailbox_raw)
-            status, _ = self.conn.select(encoded_mailbox)
+            status, _ = await self.conn.select(encoded_mailbox)
             
             if status != "OK":
-                logger.error(f"无法进入文件夹: {self.mailbox_raw} (编码后: {encoded_mailbox})")
-                
-                # --- 诊断逻辑：列出所有文件夹 ---
-                logger.info("正在获取邮箱内所有文件夹列表，请在下方日志中查看正确名称：")
-                typ, folders = self.conn.list()
+                logger.error(f"无法进入文件夹: {self.mailbox_raw}")
+                typ, folders = await self.conn.list()
                 if typ == 'OK':
                     for f in folders:
-                        # 尝试解码文件夹名以便阅读
                         try:
-                            f_str = f.decode('ascii')
-                            logger.info(f"发现文件夹 -> {f_str}")
+                            logger.info(f"发现文件夹 -> {f.decode('ascii')}")
                         except:
-                            logger.info(f"发现文件夹 (原始数据) -> {f}")
-                # ------------------------------
-                
+                            logger.info(f"发现文件夹 (原始) -> {f}")
                 raise RuntimeError(f"文件夹 {self.mailbox_raw} 不存在")
             
             logger.info(f"成功进入文件夹: {self.mailbox_raw}")
@@ -82,43 +72,55 @@ class SecureIMAPClient:
             raise
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
         if self.conn:
             try:
                 if self.conn.state == "SELECTED":
-                    self.conn.close()
-                self.conn.logout()
+                    await self.conn.close()
+                await self.conn.logout()
             except:
                 pass
 
-    def fetch_emails(self) -> Generator[Tuple[str, Message], None, None]:
+    async def fetch_emails_batch(self, batch_size: int = 50) -> Generator[Tuple[str, Message], None, None]:
+        """批量抓取邮件，减少IO次数"""
         try:
-            from main import parse_subject, parse_subject_pattern
             start_date = os.environ.get("START_DATE", "01-Mar-2025")
-            # 搜索日期后的邮件
-            status, data = self.conn.uid('SEARCH', 'SINCE', start_date)
+            status, data = await self.conn.uid('SEARCH', 'SINCE', start_date)
             
             if status != 'OK' or not data[0]:
-                logger.info("当前文件夹内未找到符合日期要求的邮件")
+                logger.info("未找到符合日期的邮件")
                 return
 
             uids = data[0].split()
-            for uid_bytes in uids:
-                uid = uid_bytes.decode('utf-8')
-                # 先抓取头信息，减少流量
-                status, header_data = self.conn.uid('FETCH', uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
+            # 分批处理UID
+            for i in range(0, len(uids), batch_size):
+                batch_uids = uids[i:i+batch_size]
+                # 批量抓取头信息
+                uid_str = ','.join([uid.decode('utf-8') for uid in batch_uids])
+                status, header_data = await self.conn.uid('FETCH', uid_str, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
+                
                 if status != 'OK': continue
+                # 解析头信息过滤
+                from main import parse_subject, parse_subject_pattern
+                valid_uids = []
+                for idx, uid_bytes in enumerate(batch_uids):
+                    uid = uid_bytes.decode('utf-8')
+                    # 匹配头信息位置
+                    header_part = header_data[idx*2] if len(header_data) > idx*2 else None
+                    if not header_part: continue
+                    header_msg = message_from_bytes(header_part[1])
+                    subject = parse_subject(header_msg)
+                    name, sid = parse_subject_pattern(subject)
+                    if name and sid:
+                        valid_uids.append(uid)
                 
-                header_msg = message_from_bytes(header_data[0][1])
-                subject = parse_subject(header_msg)
-                
-                name, sid = parse_subject_pattern(subject)
-                if not (name and sid): continue
-
-                # 匹配成功，抓取全文
-                status, full_data = self.conn.uid('FETCH', uid, '(RFC822)')
-                if status == 'OK':
-                    yield uid, message_from_bytes(full_data[0][1])
-                    
+                # 批量抓取有效邮件全文
+                if valid_uids:
+                    valid_uid_str = ','.join(valid_uids)
+                    status, full_data = await self.conn.uid('FETCH', valid_uid_str, '(RFC822)')
+                    if status == 'OK':
+                        for item in full_data:
+                            if isinstance(item, tuple) and len(item) >= 2:
+                                yield item[0].split()[2].decode('utf-8'), message_from_bytes(item[1])
         except Exception as e:
-            logger.error(f"抓取邮件异常: {e}")
+            logger.error(f"批量抓取邮件异常: {e}")
