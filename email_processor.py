@@ -1,41 +1,35 @@
-import re, os, logging
+import os
+import aiofiles
 from pathlib import Path
-from email.header import decode_header
-from config import PDF_DIR
-import aiofiles  # 需安装：pip install aiofiles
-
-logger = logging.getLogger(__name__)
+from email.message import Message
 
 class EmailProcessor:
-    def sanitize_filename(self, name: str) -> str:
-        return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
+    def __init__(self):
+        self.attachments_dir = Path("data/attachments")
+        self.attachments_dir.mkdir(exist_ok=True, parents=True)
 
-    async def save_attachments(self, msg, student_id, name):
-        """异步保存附件，批量写入"""
-        attachments = []
-        save_dir = PDF_DIR / f"{student_id}_{self.sanitize_filename(name)}"
-        save_dir.mkdir(exist_ok=True, parents=True)
+    def save_attachments(self, msg: Message, student_id: str, name: str) -> list[Path]:
+        saved_files = []
         
-        # 先收集所有附件数据，再批量写入
-        attachment_data = []
         for part in msg.walk():
-            if part.get_content_maintype() == 'multipart': continue
+            if part.get_content_maintype() == 'multipart':
+                continue
+            if part.get('Content-Disposition') is None:
+                continue
+
             filename = part.get_filename()
-            if not filename: continue
-            
-            decoded = []
-            for p, c in decode_header(filename):
-                decoded.append(p.decode(c or 'utf-8', errors='replace') if isinstance(p, bytes) else str(p))
-            safe_filename = self.sanitize_filename("".join(decoded))
-            filepath = save_dir / safe_filename
-            payload = part.get_payload(decode=True)
-            if isinstance(payload, bytes):
-                attachment_data.append((filepath, payload))
-                attachments.append(filepath)
-        
-        # 异步批量写入文件
-        for filepath, payload in attachment_data:
-            async with aiofiles.open(filepath, "wb") as f:
-                await f.write(payload)
-        
-        return attachments
+            if not filename:
+                continue
+
+            suffix = Path(filename).suffix.lower()
+            save_name = f"{student_id}_{name}{suffix}"
+            save_path = self.attachments_dir / save_name
+
+            try:
+                with open(save_path, 'wb') as f:
+                    f.write(part.get_payload(decode=True))
+                saved_files.append(save_path)
+            except:
+                continue
+
+        return saved_files
