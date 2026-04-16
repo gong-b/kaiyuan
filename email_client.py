@@ -1,79 +1,63 @@
-import asyncio
-import aioimaplib
-import ssl
-import logging
-import os
-import base64
-import re
-from typing import AsyncGenerator, Optional
+import imaplib, ssl, logging, os, base64
+from typing import Generator, Tuple
 from email import message_from_bytes
 from email.message import Message
-from config import IMAP_HOST, IMAP_PORT, EMAIL_USER, EMAIL_PASSWORD
+from config import IMAP_HOST, IMAP_PORT
 
 logger = logging.getLogger(__name__)
 
 def imap_utf7_encode(text):
     def _modified_base64(s):
-        s_utf16 = s.encode('utf-16-be')
-        return base64.b64encode(s_utf16).decode('ascii').rstrip('=').replace('/', ',')
+        return base64.b64encode(s.encode('utf-16-be')).decode('ascii').rstrip('=').replace('/', ',')
     res = []
     i = 0
     while i < len(text):
         c = text[i]
         if 0x20 <= ord(c) <= 0x7e:
-            res.append('&-' if c == '&' else c)
+            res.append('&-') if c == '&' else res.append(c)
             i += 1
         else:
             j = i
-            while j < len(text) and not (0x20 <= ord(text[j]) <= 0x7e):
-                j += 1
+            while j < len(text) and not (0x20 <= ord(text[j]) <= 0x7e): j += 1
             res.append('&' + _modified_base64(text[i:j]) + '-')
             i = j
     return "".join(res)
 
-class AsyncSecureIMAPClient:
-    def __init__(self):
+class SecureIMAPClient:
+    def __init__(self) -> None:
         self.host = IMAP_HOST
         self.port = IMAP_PORT
-        self.user = EMAIL_USER
-        self.password = EMAIL_PASSWORD
+        self.user = os.environ.get("EMAIL_USER")
+        self.password = os.environ.get("EMAIL_PASSWORD")
         self.mailbox_raw = "开源课堂"
-        self.conn: Optional[aioimaplib.IMAP4_SSL] = None
+        self.conn = None
 
-    async def __aenter__(self):
-        self.conn = aioimaplib.IMAP4_SSL(self.host, self.port)
-        await self.conn.wait_hello_from_server()
-        await self.conn.login(self.user, self.password)
-        encoded_box = imap_utf7_encode(self.mailbox_raw)
-        await self.conn.select(encoded_box)
-        logger.info(f"已进入邮箱文件夹: {self.mailbox_raw}")
+    def __enter__(self):
+        context = ssl.create_default_context()
+        self.conn = imaplib.IMAP4_SSL(self.host, self.port, ssl_context=context)
+        self.conn.login(self.user, self.password)
+        encoded_mailbox = imap_utf7_encode(self.mailbox_raw)
+        status, _ = self.conn.select(encoded_mailbox)
+        if status != "OK":
+            # 自动降级尝试 INBOX
+            self.conn.select("INBOX")
+            logger.warning(f"未能找到文件夹 {self.mailbox_raw}，已切换至收件箱")
         return self
 
-    async def __aexit__(self, *args):
-        try:
-            await self.conn.close()
-            await self.conn.logout()
-        except:
-            pass
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            self.conn.logout()
 
-    async def fetch_emails(self) -> AsyncGenerator[tuple[str, Message], None]:
-        try:
-            from main import parse_subject, parse_subject_pattern
-            start_date = os.environ.get("START_DATE", "01-Mar-2025")
-
-            # ✅ 修复：SEARCH 不能用 UID
-            status, data = await self.conn.search('SINCE', start_date)
-            if status != 'OK' or not data[0]:
-                logger.info("未找到邮件")
-                return
-
-            msg_ids = data[0].split()
-            for msg_id in msg_ids:
-                status, data = await self.conn.fetch(msg_id, '(RFC822)')
-                if status != 'OK':
-                    continue
-                msg_bytes = data[1]
-                msg = message_from_bytes(msg_bytes)
-                yield msg_id, msg
-        except Exception as e:
-            logger.error(f"抓取邮件异常: {e}")
+    def fetch_emails(self) -> Generator[Tuple[str, Message], None, None]:
+        from main import parse_subject, parse_subject_pattern
+        start_date = os.environ.get("START_DATE", "01-Mar-2025")
+        status, data = self.conn.uid('SEARCH', 'SINCE', start_date)
+        if status == 'OK' and data[0]:
+            for uid_bytes in data[0].split():
+                uid = uid_bytes.decode('utf-8')
+                # 预览头信息减少流量
+                _, h_data = self.conn.uid('FETCH', uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])')
+                header_msg = message_from_bytes(h_data[0][1])
+                if parse_subject_pattern(parse_subject(header_msg))[1]:
+                    _, full_data = self.conn.uid('FETCH', uid, '(RFC822)')
+                    yield uid, message_from_bytes(full_data[0][1])
