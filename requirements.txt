@@ -1,6 +1,5 @@
 streamlit
 pandas
 openpyxl
-pdfkit
 python-docx
 xlsxwriter
