@@ -8,8 +8,8 @@ from pathlib import Path
 import shutil
 
 # 页面基础配置
-st.set_page_config(page_title="书法班筛选", page_icon="🎓", layout="wide")
-st.title("🎓 书法班报名自动筛选系统")
+st.set_page_config(page_title="开源课堂筛选", page_icon="🎓", layout="wide")
+st.title("开源课堂报名自动筛选系统")
 
 # ---------------------- 目录与路径初始化 ----------------------
 DATA_DIR = Path("data")
@@ -136,19 +136,6 @@ if st.button("▶️ 开始筛选", type="primary"):
             st.error("❌ 处理超时（超过5分钟），请检查邮件数量或网络状态！")
         except Exception as e:
             st.error(f"❌ 执行失败：{str(e)}")
-
-# ---------------------- 辅助说明 ----------------------
-st.divider()
-st.subheader("ℹ️ 使用说明")
-st.markdown("""
-1. **邮箱配置**：需使用浙大IMAP邮箱，密码为邮箱客户端专用密码（非登录密码），需先在邮箱设置中开启IMAP/SMTP服务。
-2. **时间范围**：开始日期建议设置为报名起始日，结束日期为当前日。
-3. **名单格式**：上传的Excel文件需包含「学号」列（列名含“学号”即可），sheet名称为sheet1。
-4. **结果说明**：
-   - 录取名单：包含新鸿基直接录取 + 候补录取（按邮件接收时间排序）。
-   - 拒绝名单：包含格式错误、去年已录取、缺少附件、理由不足、名额已满等情况。
-""")
-
 # ---------------------- 清理临时文件（可选） ----------------------
 if st.button("🗑️ 清理临时文件"):
     try:
