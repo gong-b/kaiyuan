@@ -1,7 +1,6 @@
-streamlit>=1.32.0
-pandas>=2.1.0
-openpyxl>=3.1.0
-python-docx>=0.8.11
-aioimaplib>=1.0.0
-aiofiles>=23.2.1
-python-dotenv>=1.0.0
+streamlit
+pandas
+openpyxl
+pdfkit
+python-docx
+xlsxwriter
