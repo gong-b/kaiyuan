@@ -33,78 +33,75 @@ def parse_subject_pattern(subject: str):
     return None, None
 
 def run_task():
-    # 获取环境变量
-    user = os.environ.get("EMAIL_USER")
-    pwd = os.environ.get("EMAIL_PASSWORD")
-    # 转换日期格式
+    # 获取环境变量参数
     start_dt = datetime.strptime(os.environ.get("START_DATE"), "%Y-%m-%d")
     end_dt = datetime.strptime(os.environ.get("END_DATE"), "%Y-%m-%d")
     
     # 加载名单
     new_hongji = read_student_list(str(NEW_HONGJI_FILE))
     last_year = read_student_list(str(LAST_YEAR_FILE))
-    # 黑名单加载 (假设你上传了名为 blacklist.xlsx 的文件)
-    blacklist = read_student_list("data/blacklist.xlsx") 
+    
+    # 动态加载黑名单（如果不存在则为空集）
+    blacklist_path = DATA_DIR / "blacklist.xlsx"
+    blacklist = read_student_list(str(blacklist_path)) if blacklist_path.exists() else set()
 
     admitted, rejected, candidates = [], [], []
     processor = EmailProcessor()
 
     with SecureIMAPClient() as client:
-        # 注意：fetch_emails 内部已修改为由外部控制过滤
         for uid, msg in client.fetch_emails():
-            subject = parse_subject(msg)
-            name, sid = parse_subject_pattern(subject)
-            if not (name and sid): continue
-
-            # 邮件日期对象
-            raw_date = msg.get("Date")
+            # 1. 邮件时间过滤
             try:
+                raw_date = msg.get("Date")
                 msg_date = parsedate_to_datetime(raw_date).replace(tzinfo=None)
+                if not (start_dt <= msg_date <= end_dt):
+                    continue
             except: continue
 
-            # 1. 判定日期范围
-            if not (start_dt <= msg_date <= end_dt):
-                continue
+            # 2. 主题解析
+            subject = parse_subject(msg)
+            name, sid = parse_subject_pattern(subject)
+            if not sid: continue
 
-            # 2. 判定黑名单 (新增)
+            # 3. 黑名单过滤 (最高优先级)
             if sid in blacklist:
                 rejected.append({"学号": sid, "姓名": name, "原因": "黑名单人员"})
                 continue
 
-            # 3. 去年录取判定
+            # 4. 往年录取过滤
             if sid in last_year:
-                rejected.append({"学号": sid, "姓名": name, "原因": "去年已录取"})
+                rejected.append({"学号": sid, "姓名": name, "原因": "往年已录取"})
                 continue
             
-            # 4. 新鸿基判定
+            # 5. 新鸿基直录
             if sid in new_hongji:
                 admitted.append({"学号": sid, "姓名": name, "备注": "新鸿基直录"})
                 continue
 
-            # 5. 普通审核
+            # 6. 普通附件审核
             attachments = processor.save_attachments(msg, sid, name)
             docx_files = [a for a in attachments if a.suffix.lower() == ".docx"]
             
             if not docx_files:
-                rejected.append({"学号": sid, "姓名": name, "原因": "缺申请表"})
+                rejected.append({"学号": sid, "姓名": name, "原因": "缺少申请表"})
                 continue
 
-            try:
-                res = parse_docx(str(docx_files[0]))
-                if not res["is_supported"]:
-                    rejected.append({"学号": sid, "姓名": name, "原因": "非资助对象"})
-                elif res["reason_length"] < 95:
-                    rejected.append({"学号": sid, "姓名": name, "原因": f"理由不足({res['reason_length']}字)"})
-                else:
-                    candidates.append((sid, name, msg_date))
-            except:
-                rejected.append({"学号": sid, "姓名": name, "原因": "解析出错"})
+            res = parse_docx(str(docx_files[0]))
+            if not res["is_supported"]:
+                rejected.append({"学号": sid, "姓名": name, "原因": "非资助对象"})
+            elif res["reason_length"] < 95:
+                rejected.append({"学号": sid, "姓名": name, "原因": f"理由不足({res['reason_length']}字)"})
+            else:
+                candidates.append((sid, name, msg_date))
 
-    # 排序录取 (总名额25)
-    remaining = 25 - len(admitted)
-    candidates.sort(key=lambda x: x[2]) # 按发送时间排序
-    for sid, n, _ in candidates[:remaining]: admitted.append({"学号": sid, "姓名": n, "备注": "普通录取"})
-    for sid, n, _ in candidates[remaining:]: rejected.append({"学号": sid, "姓名": n, "原因": "名额已满"})
+    # 7. 名额排序录取 (总名额25)
+    remaining_slots = 25 - len(admitted)
+    candidates.sort(key=lambda x: x[2]) # 时间优先原则
+    
+    for sid, n, _ in candidates[:remaining_slots]:
+        admitted.append({"学号": sid, "姓名": n, "备注": "普通录取(时间优先)"})
+    for sid, n, _ in candidates[remaining_slots:]:
+        rejected.append({"学号": sid, "姓名": n, "原因": "名额已满"})
 
     save_results(admitted, rejected)
 
