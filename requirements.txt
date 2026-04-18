@@ -1,0 +1,7 @@
+# requirements.txt 完整依赖列表
+streamlit>=1.32.0
+pandas>=2.0.0
+openpyxl>=3.1.0  # pandas 读取Excel需要
+python-docx>=1.1.0  # 解析docx文件
+imaplib2>=3.6  # IMAP邮箱连接（可选，imaplib是Python内置）
+python-dotenv>=1.0.0  # 环境变量管理（可选）
