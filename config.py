@@ -12,8 +12,6 @@ class Config:
     
     # 录取规则配置
     MIN_REASON_LENGTH = 100  # 申请理由最低字数
-    START_DATE = "2025-03-01"  # 邮件起始日期
-    END_DATE = "2025-03-15"
     # 正则表达式（主题匹配）
     SUBJECT_PATTERN = r"""
         ^\s*
