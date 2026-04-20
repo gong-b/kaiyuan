@@ -4,14 +4,12 @@ import tempfile
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from modules.config import Config
+from modules.email_parser import EmailParser
+from modules.email_client import SecureIMAPClient
+from modules.excel_handler import ExcelHandler
+from modules.docx_parser import Docx_parser
 
-from modules import (
-    Config,
-    EmailParser,
-    SecureIMAPClient,
-    ExcelHandler,
-    DocxParser
-)
 
 st.set_page_config(page_title="书法班报名", layout="wide")
 logging.basicConfig(level=logging.ERROR)
