@@ -46,6 +46,9 @@ with col2:
     )
 
 # 第二步：上传邮件文件
+# 日期范围选择
+start_date = st.date_input("开始日期", value=pd.to_datetime("2026-03-01"))
+end_date = st.date_input("截止日期", value=pd.to_datetime("2026-04-01"))
 st.subheader("📧 上传报名邮件")
 email_files = st.file_uploader(
     "上传EML格式邮件（可多选）",
@@ -76,16 +79,19 @@ if st.button("🚀 开始审核", type="primary", disabled=not (new_hongji_file 
                 raw_email = email_file.read()
                 msg = message_from_bytes(raw_email)
                 
-                # 校验邮件日期
-                if not email_parser.check_email_date(msg):
-                    subject = email_parser.parse_subject(msg)
-                    rejected.append({
-                        "学号": "未知",
-                        "姓名": "未知",
-                        "原主题": subject,
-                        "原因": f"邮件日期早于{Config.START_DATE}"
-                    })
-                    continue
+           # 校验邮件日期
+           # 校验邮件日期（使用界面选择的日期）
+recv_date = parsedate_to_datetime(msg.get("Date"))
+recv_date = recv_date.replace(tzinfo=None)  # 去掉时区
+
+if not (start_date <= recv_date.date() <= end_date):
+    rejected.append({
+        "学号": "未知",
+        "姓名": "未知",
+        "原主题": subject,
+        "原因": f"不在所选日期范围内 {start_date} ~ {end_date}"
+    })
+    continue
                 
                 # 解析主题（姓名+学号）
                 subject = email_parser.parse_subject(msg)
