@@ -1,21 +1,37 @@
 from pathlib import Path
-import os
 
-# 动态获取环境变量，兼容本地测试
-IMAP_HOST = os.environ.get("IMAP_HOST", "imap.zju.edu.cn")
-IMAP_PORT = int(os.environ.get("IMAP_PORT", 993))
-EMAIL_USER = os.environ.get("EMAIL_USER", "zzbgs@zju.edu.cn")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
-
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True, parents=True)
-
-# 文件路径
-NEW_HONGJI_FILE = DATA_DIR / "new_hongji.xlsx"
-LAST_YEAR_FILE = DATA_DIR / "last_year.xlsx"
-ADMITTED_FILE = DATA_DIR / "admitted_students.xlsx"
-REJECTED_FILE = DATA_DIR / "rejected_students.xlsx"
-
-# 附件存放路径（虽然不转PDF，但仍需下载DOCX进行解析）
-ATTACHMENT_DIR = DATA_DIR / "attachments"
-ATTACHMENT_DIR.mkdir(exist_ok=True, parents=True)
+class Config:
+    """配置类（统一管理所有配置）"""
+    # 邮箱基础配置（Streamlit中改为手动输入/上传）
+    IMAP_HOST = "imap.zju.edu.cn"
+    IMAP_PORT = 993
+    
+    # 文件路径配置（适配Streamlit临时文件）
+    DATA_DIR = Path("data")
+    PDF_DIR = DATA_DIR / "pdfs"
+    
+    # 录取规则配置
+    ADMIT_QUOTA = 25  # 总录取名额
+    MIN_REASON_LENGTH = 95  # 申请理由最低字数
+    START_DATE = "2025-03-01"  # 邮件起始日期
+    
+    # 正则表达式（主题匹配）
+    SUBJECT_PATTERN = r"""
+        ^\s*
+        ([()（）\[\]【】\{\}｛｝])?
+        ([\u4e00-\u9fa5]{2,})
+        \s*
+        [+＋-]?
+        (\d+)
+        \s*
+        [+＋-]?
+        书法班报名申请
+        ([)）\]\】\}\｝])?
+        \s*$
+    """
+    
+    @classmethod
+    def init_dirs(cls):
+        """初始化目录（本地运行时）"""
+        cls.DATA_DIR.mkdir(exist_ok=True, parents=True)
+        cls.PDF_DIR.mkdir(exist_ok=True, parents=True)
