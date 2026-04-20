@@ -11,7 +11,7 @@ from modules.excel_handler import ExcelHandler
 from modules.docx_parser import DocxParser
 
 
-st.set_page_config(page_title="书法班报名", layout="wide")
+st.set_page_config(page_title="开源课堂报名", layout="wide")
 logging.basicConfig(level=logging.ERROR)
 
 ep = EmailParser()
@@ -50,44 +50,53 @@ if st.button("🚀 开始审核", disabled=not (hongji and last and user and pwd
                 total = len(mails)
                 bar = st.progress(0)
 
-                for idx, (uid, msg) in enumerate(mails):
-                    try:
-                        d = parsedate_to_datetime(msg["Date"]).replace(tzinfo=None)
-                        if not (s_date <= d.date() <= e_date):
-                            continue
+# app.py 核心循环部分
+for idx, (uid, msg) in enumerate(mails):
+    try:
+        # 1. 基础检查：日期过滤
+        d = parsedate_to_datetime(msg["Date"]).replace(tzinfo=None)
+        if not (s_date <= d.date() <= e_date):
+            continue
 
-                        subj = ep.parse_subject(msg)
-                        name, sid = ep.extract_name_id(subj)
+        # 2. 解析附件（核心信息来源）
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = ep.extract_docx_attachments(msg, Path(tmp))
+            
+            if not docs:
+                # 若无附件，提取主题显示，记录为拒绝
+                subj = ep.parse_subject(msg)
+                no.append({"学号": "未知", "姓名": "无附件", "原因": "缺失DOCX附件", "原主题": subj})
+                continue
 
-                        if not name or not sid:
-                            no.append({"学号":"未知","姓名":"未知","原主题":subj,"原因":"主题格式错误"})
-                            continue
+            # 3. 运行优化后的解析器
+            info = dp.parse(str(docs[0]))
+            f_name = info["name"]
+            f_sid = info["sid"]
 
-                        if sid in H:
-                            ok.append({"学号":sid,"姓名":name,"备注":"新鸿基"})
-                            continue
+            if not f_sid:
+                no.append({"学号": "未知", "姓名": f_name, "原因": "附件内无学号"})
+                continue
 
-                        if sid in L:
-                            no.append({"学号":sid,"姓名":name,"原因":"去年已录取"})
-                            continue
+            # 4. 黑白名单审核
+            if f_sid in H:
+                ok.append({"学号": f_sid, "姓名": f_name, "备注": "新鸿基(附件提取)"})
+                continue
 
-                        with tempfile.TemporaryDirectory() as tmp:
-                            docs = ep.extract_docx_attachments(msg, Path(tmp))
-                            if not docs:
-                                no.append({"学号":sid,"姓名":name,"原因":"无DOCX附件"})
-                                continue
+            if f_sid in L:
+                no.append({"学号": f_sid, "姓名": f_name, "原因": "去年已录取"})
+                continue
 
-                            info = dp.parse(str(docs[0]))
-                            if not info["is_supported"]:
-                                no.append({"学号":sid,"姓名":name,"原因":"非资助对象"})
-                            elif info["reason_length"] < Config.MIN_REASON_LENGTH:
-                                no.append({"学号":sid,"姓名":name,"原因":f"理由字数不足 {info['reason_length']}"})
-                            else:
-                                ok.append({"学号":sid,"姓名":name,"备注":"正常录取"})
+            # 5. 合规性审核
+            if not info["is_supported"]:
+                no.append({"学号": f_sid, "姓名": f_name, "原因": "非资助对象"})
+            elif info["reason_length"] < Config.MIN_REASON_LENGTH:
+                no.append({"学号": f_sid, "姓名": f_name, "原因": f"理由不足({info['reason_length']}字)"})
+            else:
+                ok.append({"学号": f_sid, "姓名": f_name, "备注": "审核通过"})
 
-                    except Exception as e:
-                        no.append({"学号":"?","姓名":"?","原因":f"异常：{str(e)[:30]}"})
-                    bar.progress((idx+1)/total)
+    except Exception as e:
+        no.append({"学号": "?", "姓名": "?", "原因": f"解析异常: {str(e)[:20]}"})
+    bar.progress((idx+1)/total)
 
             st.success(f"✅ 录取 {len(ok)} 人")
             st.dataframe(ok, use_container_width=True)
