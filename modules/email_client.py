@@ -44,11 +44,18 @@ class SecureIMAPClient:
     def __exit__(self, *args):
         self.conn.logout()
 
-    def fetch_emails(self, since_date):
-        status, data = self.conn.uid('SEARCH', 'SINCE', since_date)
-        if not data[0]:
-            return []
-        for uid in data[0].split():
-            status, d = self.conn.uid('FETCH', uid, '(RFC822)')
-            if status == 'OK':
-                yield uid.decode(), message_from_bytes(d[0][1])
+   def fetch_emails(self, since_date):
+    # 修复：先确认文件夹已选中，再执行SEARCH
+    # 1. 先检查文件夹是否选中（返回值是文件夹邮件总数）
+    select_status, select_data = self.conn.select(self.folder)
+    if select_status != 'OK':
+        raise Exception(f"无法选中文件夹：{self.folder}（编码后：{imap_utf7_encode(self.folder)}）")
+    
+    # 2. 再执行SEARCH（SINCE + ALL 确保范围正确）
+    status, data = self.conn.uid('SEARCH', 'ALL', 'SINCE', since_date)  # 新增'ALL'
+    if not data[0]:
+        return []
+    for uid in data[0].split():
+        status, d = self.conn.uid('FETCH', uid, '(RFC822)')
+        if status == 'OK':
+            yield uid.decode(), message_from_bytes(d[0][1])
