@@ -44,18 +44,19 @@ class EmailParser:
             return match.group(2), match.group(3)  # 姓名、学号
         return None, None
     
-    def check_email_date(self, msg: Message) -> bool:
-        """检查邮件日期是否符合要求"""
-        try:
-            date_str = msg.get("Date")
-            if not date_str:
-                return False
-            recv_date = parsedate_to_datetime(date_str)
-            start_date = datetime.strptime(Config.START_DATE, "%Y-%m-%d").replace(tzinfo=recv_date.tzinfo)
-            return recv_date >= start_date
-        except Exception as e:
-            logger.error(f"日期校验失败: {str(e)}")
+def check_email_date(self, msg: Message) -> bool:
+    try:
+        date_str = msg.get("Date")
+        if not date_str:
             return False
+        recv_date = parsedate_to_datetime(date_str)
+        
+        start_date = datetime.strptime(Config.START_DATE, "%Y-%m-%d").replace(tzinfo=recv_date.tzinfo)
+        end_date = datetime.strptime(Config.END_DATE, "%Y-%m-%d").replace(tzinfo=recv_date.tzinfo)
+        
+        return start_date <= recv_date <= end_date
+    except:
+        return False
     
     def extract_docx_attachments(self, msg: Message, temp_dir: Path) -> list[Path]:
         """提取邮件中的DOCX附件到临时目录"""
