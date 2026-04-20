@@ -23,9 +23,6 @@ logger = logging.getLogger(__name__)
 email_parser = EmailParser()
 excel_handler = ExcelHandler()
 docx_parser = DocxParser()
-# PDF处理器（本地运行时配置wkhtmltopdf路径，Cloud版自动跳过）
-pdf_processor = PdfProcessor(wkhtmltopdf_path=r"D:\program\wkhtmltopdf\bin\wkhtmltopdf.exe")
-
 # ===================== 页面UI =====================
 st.title("📝 书法班报名审核系统")
 st.divider()
@@ -113,9 +110,6 @@ if not (start_date <= recv_date.date() <= end_date):
                         "姓名": name,
                         "备注": "新鸿基"
                     })
-                    # 本地运行时生成PDF（Cloud版自动跳过）
-                    pdf_processor.save_email_pdf(msg, student_id, name, Config.PDF_DIR)
-                    continue
                 
                 # 去年已录取：拒绝
                 if student_id in last_year_ids:
