@@ -33,12 +33,12 @@ class DocxParser:
                         # 兼容“是”、“是的”、“是 ”等情况
                         res["is_supported"] = ("是" in v) and ("不是" not in v)
                     
-                    # 4. 申请理由长度：统计包含标点在内的总字符数（不含空格）
+                    # ========== 优化：申请理由解析（兼容多种提示语格式） ==========
                     if "申请理由" in t:
-                        # 这里的 c.text 包含了“申请理由（不少于100字）：”以及后面的内容
-                        # 我们需要去掉提示语，只计算学生填写的实际内容
-                        content = c.text.replace("申请理由（不少于100字）：", "").strip()
-                        clean_content = re.sub(r"\s+", "", content)
+                        # 正则匹配并移除所有申请理由提示前缀（兼容“申请理由：”“申请理由（不少于100字）：”等）
+                        pattern = re.compile(r"申请理由\s*[:：]\s*|申请理由\s*（.*?）\s*[:：]\s*")
+                        content = pattern.sub("", c.text).strip()
+                        clean_content = re.sub(r"\s+", "", content)  # 移除所有空格
                         res["reason_length"] = len(clean_content)
         except Exception as e:
             print(f"解析附件出错: {e}")
