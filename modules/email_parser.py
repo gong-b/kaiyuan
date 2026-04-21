@@ -30,7 +30,7 @@ class EmailParser:
             return None, None
         return name, sid
 
-    def extract_docx_attachments(self, msg, tmp_dir):
+    def extract_attachments(self, msg, tmp_dir):
         res = []
         for part in msg.walk():
             if part.get_content_maintype() == "multipart":
@@ -50,7 +50,7 @@ class EmailParser:
                     filename = decoded_filename
                 except:
                     pass 
-            if not filename or not filename.lower().endswith((".docx", ".doc")):
+            if not filename or not filename.lower().endswith((".docx", ".doc",".pdf")):
                 continue   
             safe = Path(filename).name
             p = tmp_dir / safe
