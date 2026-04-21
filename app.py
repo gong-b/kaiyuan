@@ -154,7 +154,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "录取班级": record["class"], 
                                 "备注": record.get("remark", ""), 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
-                                "date_obj": record["date"]  # 原始日期对象，用于排序
+                                "date_obj": record["date"],
+                                "class_sort": record["class"]  # 新增：用于整体按班级排序
                             })
                         else:
                             no_final.append({
@@ -164,7 +165,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "原因": record["reason"], 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
                                 "原主题": record["subject"],
-                                "date_obj": record["date"]  # 原始日期对象，用于排序
+                                "date_obj": record["date"],
+                                "class_sort": record["class"]  # 新增：用于整体按班级排序
                             })
 
                     # 缓存结果
@@ -178,62 +180,70 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
         except Exception as ex:
             st.error(f"❌ 运行出错：{str(ex)}")
 
-# ========== 关键修改：先按班级分类，再按时间排序 ==========
+# ========== 修复后：先按班级分类，再按时间排序 ==========
 def group_and_sort(data, class_key):
     """
-    第一步：按班级分组；第二步：组内按报名时间排序
+    第一步：按班级分组；第二步：组内按报名时间排序；第三步：整体按班级名称排序
     :param data: 原始名单数据
     :param class_key: 班级字段名（录取名单用"录取班级"，拒绝名单用"报名班级"）
-    :return: 分组+排序后的字典 {班级名: [排序后的学生列表]}
+    :return: 1. 分组排序后的字典 2. 整体按班级+时间排序的列表（用于下载）
     """
-    # 第一步：按班级分组（核心：先分类）
+    # 第一步：按班级分组
     class_groups = {}
     for student in data:
-        cls_name = student[class_key]  # 获取当前学生的班级
+        cls_name = student[class_key]
         if cls_name not in class_groups:
-            class_groups[cls_name] = []  # 新建班级分组
-        class_groups[cls_name].append(student)  # 把学生加入对应班级
+            class_groups[cls_name] = []
+        class_groups[cls_name].append(student)
     
-    # 第二步：每个班级内按报名时间排序（核心：组内排序）
+    # 第二步：每个班级内按报名时间升序排序（先报名在前）
     for cls_name in class_groups:
-        # 按date_obj升序（先报名在前），reverse=True则为降序（后报名在前）
         class_groups[cls_name].sort(key=lambda x: x["date_obj"], reverse=False)
     
-    # 可选：对班级名称本身排序（让展示更规整，如按拼音/数字）
+    # 第三步：按班级名称排序（保证整体展示顺序是按班级来）
     sorted_class_names = sorted(class_groups.keys())
-    return {cls: class_groups[cls] for cls in sorted_class_names}
+    sorted_groups = {cls: class_groups[cls] for cls in sorted_class_names}
 
-# ========== 结果展示（基于分组+排序） ==========
+    # 生成整体排序的列表（用于下载：先班级，后时间）
+    total_sorted_list = []
+    for cls in sorted_class_names:
+        total_sorted_list.extend(class_groups[cls])
+    
+    return sorted_groups, total_sorted_list
+
+# ========== 结果展示与下载（修复核心） ==========
 if st.session_state.audit_result["total"] > 0:
     ok_final = st.session_state.audit_result["ok_final"]
     no_final = st.session_state.audit_result["no_final"]
 
-    # 录取名单：先按「录取班级」分组，再按时间排序
-    ok_grouped = group_and_sort(ok_final, class_key="录取班级")
-    # 拒绝名单：先按「报名班级」分组，再按时间排序
-    no_grouped = group_and_sort(no_final, class_key="报名班级")
+    # 录取名单：先按班级分组，再按时间排序
+    ok_grouped, ok_total_sorted = group_and_sort(ok_final, class_key="录取班级")
+    # 拒绝名单：先按班级分组，再按时间排序
+    no_grouped, no_total_sorted = group_and_sort(no_final, class_key="报名班级")
 
     # 分栏展示
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader(f"🎯 录取名单（总计 {len(ok_final)} 人）")
-        # 遍历每个班级分组展示
+        # 按班级分组展示（先班级，组内时间）
         for cls_name, students in ok_grouped.items():
             with st.expander(f"{cls_name}（{len(students)} 人）"):
-                # 移除排序用的date_obj，只展示有用字段
-                display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
+                # 移除排序用的字段，只展示有用信息
+                display_data = [{k: v for k, v in s.items() if k not in ["date_obj", "class_sort"]} for s in students]
                 st.dataframe(display_data, use_container_width=True)
-        # 下载录取名单（移除date_obj）
-        ok_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in ok_final]
+        
+        # 下载的列表：先按班级排序，再按时间排序
+        ok_download = [{k: v for k, v in s.items() if k not in ["date_obj", "class_sort"]} for s in ok_total_sorted]
         st.download_button("📥 下载录取名单", eh.to_excel_bytes(ok_download), "录取表.xlsx", use_container_width=True)
 
     with col_b:
         st.subheader(f"❌ 拒绝名单（总计 {len(no_final)} 人）")
-        # 遍历每个班级分组展示
+        # 按班级分组展示（先班级，组内时间）
         for cls_name, students in no_grouped.items():
             with st.expander(f"{cls_name}（{len(students)} 人）"):
-                display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
+                display_data = [{k: v for k, v in s.items() if k not in ["date_obj", "class_sort"]} for s in students]
                 st.dataframe(display_data, use_container_width=True)
-        # 下载拒绝名单（移除date_obj）
-        no_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in no_final]
+        
+        # 下载的列表：先按班级排序，再按时间排序
+        no_download = [{k: v for k, v in s.items() if k not in ["date_obj", "class_sort"]} for s in no_total_sorted]
         st.download_button("📥 下载拒绝名单", eh.to_excel_bytes(no_download), "拒绝表.xlsx", use_container_width=True)
