@@ -1,80 +1,74 @@
+import os
 import re
-import pdfplumber
+import tempfile
 from docx import Document
+from pdf2docx import Converter
 
 class FileParser:
     @staticmethod
     def parse(path):
         ext = str(path).lower()
         if ext.endswith('.pdf'):
-            return FileParser._parse_pdf(path)
+            # 创建临时 docx 文件路径
+            with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_docx:
+                tmp_docx_path = tmp_docx.name
+            
+            try:
+                # 核心步骤：将 PDF 转换为 Docx
+                cv = Converter(path)
+                cv.convert(tmp_docx_path, start=0, end=1) # 只转第一页，节省资源
+                cv.close()
+                
+                # 调用 docx 解析逻辑
+                res = FileParser._parse_docx(tmp_docx_path)
+                
+                # 清理临时文件
+                if os.path.exists(tmp_docx_path):
+                    os.remove(tmp_docx_path)
+                return res
+            except Exception as e:
+                print(f"PDF 转换失败: {e}")
+                return {"name": "转换失败", "sid": None, "apply_class": "PDF解析异常"}
+                
         return FileParser._parse_docx(path)
 
     @staticmethod
     def _parse_docx(path):
+        """你之前最稳健的 Docx 解析代码"""
         res = {"is_supported": False, "reason_length": 0, "name": "未知", "sid": None, "apply_class": ""}
         try:
             doc = Document(path)
-            # 1. 提取班级：从标题行精准抓取（如：多媒体软件班）
+            
+            # 1. 提取班级（通过搜索标题行）
             for para in doc.paragraphs:
-                text = para.text.strip()
-                match = re.search(r"“?(.+?班)”?", text)
-                if match and "报名申请表" in text:
+                text = para.text.replace(" ", "")
+                # 匹配：XXX班报名申请表
+                match = re.search(r"(.+?班)报名申请表", text)
+                if match:
                     res["apply_class"] = match.group(1)
                     break
-            
-            # 2. 提取表格数据
+
             if doc.tables:
                 table = doc.tables[0]
-                full_cells = [cell.text.strip() for row in table.rows for cell in row.cells]
-                for i, t in enumerate(full_cells):
-                    if t == "姓名" and i + 1 < len(full_cells):
-                        res["name"] = full_cells[i+1]
-                    if t == "学号" and i + 1 < len(full_cells):
-                        res["sid"] = "".join(filter(str.isdigit, full_cells[i+1]))
-                    if "资助对象" in t:
-                        # 检查当前格或后一格是否有“是”
-                        context = "".join(full_cells[max(0, i-1):i+2])
+                # 将表格内容展平处理，增加容错性
+                full_text_list = [cell.text.strip() for row in table.rows for cell in row.cells]
+                
+                for i, text in enumerate(full_text_list):
+                    if text == "姓名" and i + 1 < len(full_text_list):
+                        res["name"] = full_text_list[i+1]
+                    if text == "学号" and i + 1 < len(full_text_list):
+                        # 仅保留数字
+                        res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
+                    if "资助对象" in text:
+                        # 检查当前格或后两格是否有“是”
+                        context = "".join(full_text_list[i:i+3])
                         res["is_supported"] = "是" in context and "不是" not in context
-                    if "申请理由" in t:
-                        content = full_cells[i] if len(full_cells[i]) > 20 else (full_cells[i+1] if i+1 < len(full_cells) else "")
+                    if "申请理由" in text:
+                        # 理由通常在当前单元格（如果标题和内容合在一起）或下一个单元格
+                        content = full_text_list[i] if len(full_text_list[i]) > 30 else (full_text_list[i+1] if i+1 < len(full_text_list) else "")
+                        # 去除“申请理由”字样及其后的标点
+                        content = re.sub(r"申请理由.*?[:：]", "", content).strip()
                         res["reason_length"] = len(re.sub(r"\s+", "", content))
-        except Exception: pass
-        return res
-
-    @staticmethod
-    def _parse_pdf(path):
-        res = {"is_supported": False, "reason_length": 0, "name": "未知", "sid": None, "apply_class": ""}
-        try:
-            with pdfplumber.open(path) as pdf:
-                page = pdf.pages[0]
-                text = page.extract_text()
-                
-                # 1. 提取标题中的班级
-                if text:
-                    lines = text.split('\n')
-                    for line in lines:
-                        match = re.search(r"“?(.+?班)”?", line)
-                        if match and "报名申请表" in line:
-                            res["apply_class"] = match.group(1)
-                            break
-                
-                # 2. 提取表格（针对 PDF 布局优化）
-                table = page.extract_table()
-                if table:
-                    flat = [str(item).replace('\n', '').strip() if item else "" for row in table for item in row]
-                    for i, val in enumerate(flat):
-                        if val == "姓名" and i + 1 < len(flat):
-                            res["name"] = flat[i+1]
-                        if val == "学号" and i + 1 < len(flat):
-                            res["sid"] = "".join(filter(str.isdigit, flat[i+1]))
-                        if "资助对象" in val or "是否为学生" in val:
-                            # 针对 PDF 换行情况，检查附近格
-                            context = "".join(flat[max(0, i-2):i+3])
-                            res["is_supported"] = "是" in context and "不是" not in context
-                        if "申请理由" in val:
-                            # 理由可能在同一格也可能在后面
-                            content = flat[i+1] if i+1 < len(flat) and len(flat[i+1]) > 10 else flat[i]
-                            res["reason_length"] = len(re.sub(r"\s+", "", content))
-        except Exception: pass
+        except Exception:
+            pass
         return res
