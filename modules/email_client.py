@@ -3,6 +3,7 @@ import ssl
 import base64
 import logging
 from email import message_from_bytes
+from email.utils import parseaddr
 
 logger = logging.getLogger(__name__)
 # 补充日志配置（可选，方便调试）
@@ -31,8 +32,6 @@ def imap_utf7_encode(text):
     except Exception as e:
         logger.error(f"IMAP UTF7 编码失败：{text}，错误：{str(e)}")
         return text
-
-from email.utils import parseaddr  # 新增：用于精准解析邮件地址
 
 logger = logging.getLogger(__name__)
 class SecureIMAPClient:
