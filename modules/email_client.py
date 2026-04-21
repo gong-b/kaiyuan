@@ -40,9 +40,6 @@ from email import message_from_bytes
 from email.utils import parseaddr  # 新增：用于精准解析邮件地址
 
 logger = logging.getLogger(__name__)
-
-# ... (imap_utf7_encode 函数保持不变) ...
-
 class SecureIMAPClient:
     def __init__(self, user, password, folder="INBOX"):
         self.user = user
