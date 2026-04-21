@@ -80,20 +80,17 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             subj = ep.parse_subject(msg)
                             if any(prefix in subj[:5].upper() for prefix in ["RE:", "FW:", "回复:", "转发:"]): continue
 
-                            # 2. 提取附件（核心修改：无附件则彻底不管）
+                            # 2. 提取附件（核心：无附件则跳过）
                             with tempfile.TemporaryDirectory() as tmp:
                                 tmp_path = Path(tmp)
                                 docs = ep.extract_attachments(msg, tmp_path)
-                                
-                                # 【逻辑修改】：如果没有 .docx 附件，直接跳过处理下一封，不记录任何信息
                                 if not docs:
                                     continue 
 
-                                # 3. 解析附件：此时信息 100% 来自 docx
+                                # 3. 解析附件信息
                                 info = FileParser.parse(str(docs[0]))
                                 f_name = info.get("name", "未知")
                                 f_sid = str(info.get("sid", "")).strip()
-                                # 优先从附件解析班级（如“日语班”），若无则从主题简单匹配
                                 apply_class = info.get("apply_class", "")
                                 if not apply_class:
                                     class_match = re.search(r"([^+、\s]+班)", subj)
@@ -105,17 +102,16 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                     current_record = {
                                         "name": f_name, "sid": "缺失", "class": apply_class,
                                         "status": "reject", "reason": "报名表内未填写学号",
-                                        "subject": subj, "date": datetime.now() # 附件无日期则取当前
+                                        "subject": subj, "date": datetime.now()
                                     }
                                 else:
-                                    # 检查日期范围（附件有效才检查日期）
                                     try:
                                         d_utc = parsedate_to_datetime(msg["Date"])
                                         d_local = d_utc.astimezone()
                                         if not (s_date <= d_local.date() <= e_date): continue
                                     except: d_local = datetime.now()
 
-                                    # 具体的自动化审核规则
+                                    # 自动化审核规则
                                     if f_sid in B:
                                         current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "黑名单人员", "subject": subj, "date": d_local}
                                     elif f_sid in H:
@@ -138,7 +134,6 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                         student_records[sid_key] = current_record
                                     else:
                                         existing = student_records[sid_key]
-                                        # 录取优先
                                         if existing["status"] == "reject" and current_record["status"] == "accept":
                                             student_records[sid_key] = current_record
                                         elif existing["status"] == current_record["status"]:
@@ -150,7 +145,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             logging.error(f"邮件 {uid} 处理失败: {e}")
                             continue
 
-                    # 循环结束后生成报表
+                    # 生成最终名单（保留日期对象用于排序）
                     for sid, record in student_records.items():
                         if record["status"] == "accept":
                             ok_final.append({
@@ -159,7 +154,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "录取班级": record["class"], 
                                 "备注": record.get("remark", ""), 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
-                                "date_obj": record["date"]  # 保留原始日期对象用于排序
+                                "date_obj": record["date"]  # 原始日期对象，用于排序
                             })
                         else:
                             no_final.append({
@@ -169,71 +164,76 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "原因": record["reason"], 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
                                 "原主题": record["subject"],
-                                "date_obj": record["date"]  # 保留原始日期对象用于排序
+                                "date_obj": record["date"]  # 原始日期对象，用于排序
                             })
 
-                    # 将结果存入Session State，避免刷新/下载后丢失
+                    # 缓存结果
                     st.session_state.audit_result = {
                         "ok_final": ok_final,
                         "no_final": no_final,
                         "total": len(student_records)
                     }
-
                     st.success(f"✅ 处理完成，找到有效申请 {len(student_records)} 份")
 
         except Exception as ex:
             st.error(f"❌ 运行出错：{str(ex)}")
 
-# ========== 结果展示与下载（基于Session State） ==========
+# ========== 关键修改：先按班级分类，再按时间排序 ==========
+def group_and_sort(data, class_key):
+    """
+    第一步：按班级分组；第二步：组内按报名时间排序
+    :param data: 原始名单数据
+    :param class_key: 班级字段名（录取名单用"录取班级"，拒绝名单用"报名班级"）
+    :return: 分组+排序后的字典 {班级名: [排序后的学生列表]}
+    """
+    # 第一步：按班级分组（核心：先分类）
+    class_groups = {}
+    for student in data:
+        cls_name = student[class_key]  # 获取当前学生的班级
+        if cls_name not in class_groups:
+            class_groups[cls_name] = []  # 新建班级分组
+        class_groups[cls_name].append(student)  # 把学生加入对应班级
+    
+    # 第二步：每个班级内按报名时间排序（核心：组内排序）
+    for cls_name in class_groups:
+        # 按date_obj升序（先报名在前），reverse=True则为降序（后报名在前）
+        class_groups[cls_name].sort(key=lambda x: x["date_obj"], reverse=False)
+    
+    # 可选：对班级名称本身排序（让展示更规整，如按拼音/数字）
+    sorted_class_names = sorted(class_groups.keys())
+    return {cls: class_groups[cls] for cls in sorted_class_names}
+
+# ========== 结果展示（基于分组+排序） ==========
 if st.session_state.audit_result["total"] > 0:
     ok_final = st.session_state.audit_result["ok_final"]
     no_final = st.session_state.audit_result["no_final"]
 
-    # 定义分类排序函数：按班级分组，组内按报名时间升序
-    def group_and_sort(data, class_key, date_key="date_obj"):
-        # 按班级分组
-        class_groups = {}
-        for item in data:
-            cls = item[class_key]
-            if cls not in class_groups:
-                class_groups[cls] = []
-            class_groups[cls].append(item)
-        
-        # 每组内按报名时间升序排序（先报名在前）
-        for cls in class_groups:
-            class_groups[cls].sort(key=lambda x: x[date_key])
-        
-        # 按班级名称排序（可选，让展示更规整）
-        sorted_classes = sorted(class_groups.keys())
-        return {cls: class_groups[cls] for cls in sorted_classes}
+    # 录取名单：先按「录取班级」分组，再按时间排序
+    ok_grouped = group_and_sort(ok_final, class_key="录取班级")
+    # 拒绝名单：先按「报名班级」分组，再按时间排序
+    no_grouped = group_and_sort(no_final, class_key="报名班级")
 
-    # 录取名单：按录取班级分组+排序
-    ok_grouped = group_and_sort(ok_final, "录取班级")
-    # 拒绝名单：按报名班级分组+排序
-    no_grouped = group_and_sort(no_final, "报名班级")
-
-    # 展示结果
+    # 分栏展示
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader(f"🎯 录取名单（总计 {len(ok_final)} 人）")
-        # 按班级展示录取名单
-        for cls, students in ok_grouped.items():
-            with st.expander(f"{cls}（{len(students)} 人）"):
-                # 移除date_obj字段（仅用于排序，不展示/下载）
+        # 遍历每个班级分组展示
+        for cls_name, students in ok_grouped.items():
+            with st.expander(f"{cls_name}（{len(students)} 人）"):
+                # 移除排序用的date_obj，只展示有用字段
                 display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
                 st.dataframe(display_data, use_container_width=True)
-        # 下载完整录取名单（移除date_obj）
+        # 下载录取名单（移除date_obj）
         ok_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in ok_final]
         st.download_button("📥 下载录取名单", eh.to_excel_bytes(ok_download), "录取表.xlsx", use_container_width=True)
 
     with col_b:
         st.subheader(f"❌ 拒绝名单（总计 {len(no_final)} 人）")
-        # 按班级展示拒绝名单
-        for cls, students in no_grouped.items():
-            with st.expander(f"{cls}（{len(students)} 人）"):
-                # 移除date_obj字段（仅用于排序，不展示/下载）
+        # 遍历每个班级分组展示
+        for cls_name, students in no_grouped.items():
+            with st.expander(f"{cls_name}（{len(students)} 人）"):
                 display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
                 st.dataframe(display_data, use_container_width=True)
-        # 下载完整拒绝名单（移除date_obj）
+        # 下载拒绝名单（移除date_obj）
         no_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in no_final]
         st.download_button("📥 下载拒绝名单", eh.to_excel_bytes(no_download), "拒绝表.xlsx", use_container_width=True)
