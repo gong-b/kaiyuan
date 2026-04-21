@@ -13,6 +13,14 @@ class DocxParser:
         }
         try:
             doc = Document(path)
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if not text: continue
+                # 匹配如“日语班报名申请表”中的“日语班”
+                match = re.search(r"([^\s]+?班)报名申请表", text)
+                if match:
+                    res["apply_class"] = match.group(1)
+                    break
             if not doc.tables:
                 return res
             
