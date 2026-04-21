@@ -35,12 +35,29 @@ class EmailParser:
         for part in msg.walk():
             if part.get_content_maintype() == "multipart":
                 continue
-            fn = part.get_filename()
-            if not fn or not fn.lower().endswith(".docx"):
-                continue
-            safe = Path(fn).name
-            p = tmp_dir / safe
-            with open(p, "wb") as f:
-                f.write(part.get_payload(decode=True))
-            res.append(p)
-        return res
+           filename = part.get_filename()
+        
+        # 2. 如果有文件名，进行解码处理
+        if filename:
+            try:
+                decode_parts = decode_header(filename)
+                decoded_filename = ""
+                for content, charset in decode_parts:
+                    if isinstance(content, bytes):
+                        decoded_filename += content.decode(charset or "utf-8", errors="replace")
+                    else:
+                        decoded_filename += str(content)
+                filename = decoded_filename
+            except:
+                pass 
+
+        # 3. 判定后缀（增加对 .doc 的兼容建议，防止学生发错格式）
+        if not filename or not filename.lower().endswith((".docx", ".doc")):
+            continue
+            
+        safe = Path(filename).name
+        p = tmp_dir / safe
+        with open(p, "wb") as f:
+            f.write(part.get_payload(decode=True))
+        res.append(p)
+    return res
