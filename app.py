@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.ERROR)
 
 ep = EmailParser()
 eh = ExcelHandler()
-dp = DocxParser()
+dp = FileParser()
 
 st.title("开源课堂报名审核")
 st.divider()
