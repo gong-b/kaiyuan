@@ -12,7 +12,7 @@ from modules.config import Config
 from modules.email_parser import EmailParser
 from modules.email_client import SecureIMAPClient
 from modules.excel_handler import ExcelHandler
-from modules.docx_parser import DocxParser
+from modules.file_parser import FileParser
 
 st.set_page_config(page_title="开源课堂报名", layout="wide")
 logging.basicConfig(level=logging.ERROR)
@@ -74,14 +74,14 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             # 2. 提取附件（核心修改：无附件则彻底不管）
                             with tempfile.TemporaryDirectory() as tmp:
                                 tmp_path = Path(tmp)
-                                docs = ep.extract_docx_attachments(msg, tmp_path)
+                                docs = ep.extract_attachments(msg, tmp_path)
                                 
                                 # 【逻辑修改】：如果没有 .docx 附件，直接跳过处理下一封，不记录任何信息
                                 if not docs:
                                     continue 
 
                                 # 3. 解析附件：此时信息 100% 来自 docx
-                                info = dp.parse(str(docs[0]))
+                                info = FileParser.parse(str(docs[0]))
                                 f_name = info.get("name", "未知")
                                 f_sid = str(info.get("sid", "")).strip()
                                 # 优先从附件解析班级（如“日语班”），若无则从主题简单匹配
