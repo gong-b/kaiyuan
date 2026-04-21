@@ -40,7 +40,7 @@ with ca:
     user = st.text_input("邮箱账号")
     pwd = st.text_input("授权码", type="password")
 with cb:
-    folder = st.text_input("文件夹", value="其他文件夹/开源课堂")
+    folder = st.text_input("文件夹", value="开源课堂")
     s_date = st.date_input("开始日期", datetime(2026,3,1))
     e_date = st.date_input("截止日期", datetime(2026,5,1))
 
