@@ -32,11 +32,6 @@ def imap_utf7_encode(text):
         logger.error(f"IMAP UTF7 编码失败：{text}，错误：{str(e)}")
         return text
 
-import imaplib
-import ssl
-import base64
-import logging
-from email import message_from_bytes
 from email.utils import parseaddr  # 新增：用于精准解析邮件地址
 
 logger = logging.getLogger(__name__)
