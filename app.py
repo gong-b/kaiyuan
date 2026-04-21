@@ -87,7 +87,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 # 优先从附件解析班级（如“日语班”），若无则从主题简单匹配
                                 apply_class = info.get("apply_class", "")
                                 if not apply_class:
-                                    class_match = re.search(r"([^+]+班)", subj)
+                                    class_match = re.search(r"([^+、\s]+班)", subj)
                                     apply_class = class_match.group(1).strip() if class_match else "未知班级"
 
                                 # 4. 审核逻辑
