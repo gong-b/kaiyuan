@@ -14,6 +14,14 @@ from modules.email_client import SecureIMAPClient
 from modules.excel_handler import ExcelHandler
 from modules.file_parser import FileParser
 
+# 初始化Session State，缓存审核结果
+if "audit_result" not in st.session_state:
+    st.session_state.audit_result = {
+        "ok_final": [],
+        "no_final": [],
+        "total": 0
+    }
+
 st.set_page_config(page_title="开源课堂报名", layout="wide")
 logging.basicConfig(level=logging.ERROR)
 
@@ -24,15 +32,7 @@ dp = FileParser()
 st.title("开源课堂报名审核")
 st.divider()
 
-# ========== 1. 初始化 Session State (解决下载刷新问题) ==========
-if "ok_final" not in st.session_state:
-    st.session_state.ok_final = []
-if "no_final" not in st.session_state:
-    st.session_state.no_final = []
-if "has_processed" not in st.session_state:
-    st.session_state.has_processed = False
-
-# ========== 2. 文件上传与配置 ==========
+# ========== 第一步：文件上传 ==========
 c1, c2, c3 = st.columns(3)
 with c1:
     hongji = st.file_uploader("📋 新鸿基名单 Excel（可选）", type="xlsx")
@@ -50,130 +50,190 @@ with cb:
     folder = st.text_input("文件夹", value="开源课堂")
     s_date = st.date_input("开始日期", datetime(2026,3,1))
     e_date = st.date_input("截止日期", datetime(2026,5,1))
-if st.button("🚀 开始审核", type="primary"):
-    if not user or not pwd:
-        st.error("请输入账号和授权码")
-    else:
+
+# ========== 核心审核逻辑 ==========
+if st.button("🚀 开始审核", disabled=not (user and pwd)):
+    with st.spinner("正在连接邮箱并扫描附件..."):
+        H = eh.read_student_list(hongji) if hongji else set()
+        L = eh.read_student_list(last) if last else set()
+        B = eh.read_student_list(blacklist) if blacklist else set()
+        
+        ok_final = []
+        no_final = []
+        student_records = {}
+        student_admitted_class = {}
+
         try:
-            # 读取参考名单
-            hj_set = eh.read_student_list(hongji) if hongji else set()
-            ls_set = eh.read_student_list(last) if last else set()
-            bl_set = eh.read_student_list(blacklist) if blacklist else set()
-
-            ok_list = []
-            no_list = []
-            student_records = {}
-
             with SecureIMAPClient(user, pwd, folder) as client:
-                imap_date = s_date.strftime("%d-%b-%Y")
-                status, data = client.conn.uid('SEARCH', 'ALL', 'SINCE', imap_date)
+                mails = list(client.fetch_emails(s_date.strftime("%d-%b-%Y")))
+                total = len(mails)
+                bar = st.progress(0, text="准备解析...")
                 
-                if status == 'OK' and data[0]:
-                    uids = data[0].split()
-                    total = len(uids)
-                    bar = st.progress(0, text=f"准备解析 {total} 封邮件...")
-
-                    for idx, uid in enumerate(uids):
+                if total == 0:
+                    st.info("ℹ️ 未找到指定日期范围内的邮件")
+                else:
+                    for idx, (uid, msg) in enumerate(mails):
                         try:
-                            res, msg_data = client.conn.uid('FETCH', uid, '(RFC822)')
-                            msg = message_from_bytes(msg_data[0][1])
+                            # 1. 基础过滤：过滤自己发送、回复及转发邮件
+                            sender_email = parseaddr(msg.get("From", ""))[1]
+                            if sender_email == user: continue
                             subj = ep.parse_subject(msg)
-                            date_raw = parsedate_to_datetime(msg.get("Date"))
-                            
+                            if any(prefix in subj[:5].upper() for prefix in ["RE:", "FW:", "回复:", "转发:"]): continue
+
+                            # 2. 提取附件（核心修改：无附件则彻底不管）
                             with tempfile.TemporaryDirectory() as tmp:
                                 tmp_path = Path(tmp)
-                                docs = ep.extract_docx_attachments(msg, tmp_path) # 内部已兼容PDF
+                                docs = ep.extract_attachments(msg, tmp_path)
                                 
-                                if not docs: continue
-                                
-                                info = dp.parse(str(docs[0]))
-                                sid = info.get("sid")
-                                name = info.get("name")
-                                apply_class = info.get("apply_class") or "未知班级"
+                                # 【逻辑修改】：如果没有 .docx 附件，直接跳过处理下一封，不记录任何信息
+                                if not docs:
+                                    continue 
 
-                                # 审核逻辑
-                                status_type = "accept"
-                                reason = ""
-                                
-                                if not sid:
-                                    status_type = "reject"
-                                    reason = "无法解析学号"
-                                elif sid in bl_set:
-                                    status_type = "reject"
-                                    reason = "黑名单用户"
-                                elif sid in ls_set:
-                                    status_type = "reject"
-                                    reason = "往年已录取"
-                                elif info.get("reason_length", 0) < Config.MIN_REASON_LENGTH:
-                                    status_type = "reject"
-                                    reason = f"字数不足({info.get('reason_length')})"
+                                # 3. 解析附件：此时信息 100% 来自 docx
+                                info = FileParser.parse(str(docs[0]))
+                                f_name = info.get("name", "未知")
+                                f_sid = str(info.get("sid", "")).strip()
+                                # 优先从附件解析班级（如“日语班”），若无则从主题简单匹配
+                                apply_class = info.get("apply_class", "")
+                                if not apply_class:
+                                    class_match = re.search(r"([^+、\s]+班)", subj)
+                                    apply_class = class_match.group(1).strip() if class_match else "未知班级"
 
-                                current_record = {
-                                    "sid": sid, "name": name, "class": apply_class,
-                                    "status": status_type, "reason": reason,
-                                    "date": date_raw, "subject": subj,
-                                    "remark": "新鸿基" if sid in hj_set else ""
-                                }
+                                # 4. 审核逻辑
+                                current_record = None
+                                if not f_sid:
+                                    current_record = {
+                                        "name": f_name, "sid": "缺失", "class": apply_class,
+                                        "status": "reject", "reason": "报名表内未填写学号",
+                                        "subject": subj, "date": datetime.now() # 附件无日期则取当前
+                                    }
+                                else:
+                                    # 检查日期范围（附件有效才检查日期）
+                                    try:
+                                        d_utc = parsedate_to_datetime(msg["Date"])
+                                        d_local = d_utc.astimezone()
+                                        if not (s_date <= d_local.date() <= e_date): continue
+                                    except: d_local = datetime.now()
 
-                                # 同学号去重，保留最新的
-                                if sid not in student_records or date_raw > student_records[sid]["date"]:
-                                    student_records[sid] = current_record
+                                    # 具体的自动化审核规则
+                                    if f_sid in B:
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "黑名单人员", "subject": subj, "date": d_local}
+                                    elif f_sid in H:
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "accept", "reason": "", "remark": "新鸿基录取", "date": d_local}
+                                        student_admitted_class[f_sid] = apply_class
+                                    elif f_sid in L:
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "去年已录取", "subject": subj, "date": d_local}
+                                    elif not info.get("is_supported", False):
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "非资助对象", "subject": subj, "date": d_local}
+                                    elif info.get("reason_length", 0) < Config.MIN_REASON_LENGTH:
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": f"理由不足({info['reason_length']}字)", "subject": subj, "date": d_local}
+                                    else:
+                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "accept", "reason": "", "remark": "审核通过", "date": d_local}
+                                        student_admitted_class[f_sid] = apply_class
 
-                            bar.progress((idx + 1) / total, text=f"进度：{idx + 1}/{total}")
-                        except Exception: continue
+                                # 5. 去重逻辑
+                                if current_record:
+                                    sid_key = f_sid if f_sid and f_sid != "缺失" else f"NO_SID_{uid}"
+                                    if sid_key not in student_records:
+                                        student_records[sid_key] = current_record
+                                    else:
+                                        existing = student_records[sid_key]
+                                        # 录取优先
+                                        if existing["status"] == "reject" and current_record["status"] == "accept":
+                                            student_records[sid_key] = current_record
+                                        elif existing["status"] == current_record["status"]:
+                                            if current_record["date"] > existing["date"]:
+                                                student_records[sid_key] = current_record
 
-                    # 分类并存入状态
-                    processed_ok = []
-                    processed_no = []
+                            bar.progress((idx+1)/total, text=f"解析中：{idx+1}/{total} 封")
+                        except Exception as e:
+                            logging.error(f"邮件 {uid} 处理失败: {e}")
+                            continue
+
+                    # 循环结束后生成报表
                     for sid, record in student_records.items():
                         if record["status"] == "accept":
-                            processed_ok.append({
-                                "学号": record["sid"], "姓名": record["name"], 
-                                "录取班级": record["class"], "备注": record["remark"], 
-                                "报名时间": record["date"].strftime("%Y-%m-%d %H:%M")
+                            ok_final.append({
+                                "学号": record["sid"], 
+                                "姓名": record["name"], 
+                                "录取班级": record["class"], 
+                                "备注": record.get("remark", ""), 
+                                "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
+                                "date_obj": record["date"]  # 保留原始日期对象用于排序
                             })
                         else:
-                            processed_no.append({
-                                "学号": record["sid"], "姓名": record["name"], 
-                                "报名班级": record["class"], "原因": record["reason"], 
-                                "报名时间": record["date"].strftime("%Y-%m-%d %H:%M")
+                            no_final.append({
+                                "学号": record["sid"], 
+                                "姓名": record["name"], 
+                                "报名班级": record["class"], 
+                                "原因": record["reason"], 
+                                "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
+                                "原主题": record["subject"],
+                                "date_obj": record["date"]  # 保留原始日期对象用于排序
                             })
 
-                    # ========== 3. 排序逻辑：先按班级排，再按时间排 ==========
-                    processed_ok.sort(key=lambda x: (x["录取班级"], x["报名时间"]))
-                    processed_no.sort(key=lambda x: (x["报名班级"], x["报名时间"]))
+                    # 将结果存入Session State，避免刷新/下载后丢失
+                    st.session_state.audit_result = {
+                        "ok_final": ok_final,
+                        "no_final": no_final,
+                        "total": len(student_records)
+                    }
 
-                    st.session_state.ok_final = processed_ok
-                    st.session_state.no_final = processed_no
-                    st.session_state.has_processed = True
-                    st.rerun() # 强制刷新以显示结果
+                    st.success(f"✅ 处理完成，找到有效申请 {len(student_records)} 份")
 
-        except Exception as e:
-            st.error(f"发生错误: {e}")
+        except Exception as ex:
+            st.error(f"❌ 运行出错：{str(ex)}")
 
-# ========== 4. 结果展示区域 (独立于按钮外，防止刷新消失) ==========
-if st.session_state.has_processed:
-    st.divider()
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        st.success(f"录取人数：{len(st.session_state.ok_final)}")
-        if st.session_state.ok_final:
-            st.dataframe(st.session_state.ok_final, use_container_width=True)
-            st.download_button(
-                "📥 下载录取名单", 
-                eh.to_excel_bytes(st.session_state.ok_final), 
-                "录取名单.xlsx",
-                key="btn_ok"
-            )
+# ========== 结果展示与下载（基于Session State） ==========
+if st.session_state.audit_result["total"] > 0:
+    ok_final = st.session_state.audit_result["ok_final"]
+    no_final = st.session_state.audit_result["no_final"]
 
-    with col_right:
-        st.warning(f"拒绝人数：{len(st.session_state.no_final)}")
-        if st.session_state.no_final:
-            st.dataframe(st.session_state.no_final, use_container_width=True)
-            st.download_button(
-                "📥 下载拒绝名单", 
-                eh.to_excel_bytes(st.session_state.no_final), 
-                "拒绝名单.xlsx",
-                key="btn_no"
-            )
+    # 定义分类排序函数：按班级分组，组内按报名时间升序
+    def group_and_sort(data, class_key, date_key="date_obj"):
+        # 按班级分组
+        class_groups = {}
+        for item in data:
+            cls = item[class_key]
+            if cls not in class_groups:
+                class_groups[cls] = []
+            class_groups[cls].append(item)
+        
+        # 每组内按报名时间升序排序（先报名在前）
+        for cls in class_groups:
+            class_groups[cls].sort(key=lambda x: x[date_key])
+        
+        # 按班级名称排序（可选，让展示更规整）
+        sorted_classes = sorted(class_groups.keys())
+        return {cls: class_groups[cls] for cls in sorted_classes}
+
+    # 录取名单：按录取班级分组+排序
+    ok_grouped = group_and_sort(ok_final, "录取班级")
+    # 拒绝名单：按报名班级分组+排序
+    no_grouped = group_and_sort(no_final, "报名班级")
+
+    # 展示结果
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader(f"🎯 录取名单（总计 {len(ok_final)} 人）")
+        # 按班级展示录取名单
+        for cls, students in ok_grouped.items():
+            with st.expander(f"{cls}（{len(students)} 人）"):
+                # 移除date_obj字段（仅用于排序，不展示/下载）
+                display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
+                st.dataframe(display_data, use_container_width=True)
+        # 下载完整录取名单（移除date_obj）
+        ok_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in ok_final]
+        st.download_button("📥 下载录取名单", eh.to_excel_bytes(ok_download), "录取表.xlsx", use_container_width=True)
+
+    with col_b:
+        st.subheader(f"❌ 拒绝名单（总计 {len(no_final)} 人）")
+        # 按班级展示拒绝名单
+        for cls, students in no_grouped.items():
+            with st.expander(f"{cls}（{len(students)} 人）"):
+                # 移除date_obj字段（仅用于排序，不展示/下载）
+                display_data = [{k: v for k, v in s.items() if k != "date_obj"} for s in students]
+                st.dataframe(display_data, use_container_width=True)
+        # 下载完整拒绝名单（移除date_obj）
+        no_download = [{k: v for k, v in s.items() if k != "date_obj"} for s in no_final]
+        st.download_button("📥 下载拒绝名单", eh.to_excel_bytes(no_download), "拒绝表.xlsx", use_container_width=True)
