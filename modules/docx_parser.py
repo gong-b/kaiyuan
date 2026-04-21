@@ -4,7 +4,6 @@ import re
 class DocxParser:
     @staticmethod
     def parse(path):
-        # 必须缩进！这一行前面应该有 8 个空格
         res = {
             "is_supported": False, 
             "reason_length": 0, 
