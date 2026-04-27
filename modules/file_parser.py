@@ -47,61 +47,53 @@ class FileParser:
                     res["apply_class"] = match.group(1)
                     break
 
-            # 表格解析（修复版：支持两种申请理由格式）
             if doc.tables:
                 table = doc.tables[0]
-                # 先把所有单元格内容按顺序存起来，方便后续处理
                 all_cells = []
                 for row in table.rows:
                     for cell in row.cells:
                         all_cells.append(cell)
 
-                # 遍历所有单元格，解析信息
                 for i, cell in enumerate(all_cells):
                     cell_text = cell.text.strip()
+
                     # 姓名
                     if cell_text == "姓名" and i + 1 < len(all_cells):
                         res["name"] = all_cells[i+1].text.strip()
+
                     # 学号
                     elif cell_text == "学号" and i + 1 < len(all_cells):
                         sid_text = all_cells[i+1].text.strip()
                         res["sid"] = "".join(filter(str.isdigit, sid_text))
+
                     # 联系方式
                     elif any(key in cell_text for key in ["联系方式", "电话", "手机", "联系电话"]):
                         if i + 1 < len(all_cells):
                             contact_text = all_cells[i+1].text.strip()
-                            contact = re.sub(r"[^\d\- ]", "", contact_text)
-                            res["contact"] = contact.strip()
+                            res["contact"] = re.sub(r"[^\d\- ]", "", contact_text).strip()
+
                     # 资助对象
                     elif "资助对象" in cell_text:
                         res["is_supported"] = "是" in cell_text
 
-                    # ====================== 终极修复：申请理由解析 ======================
+                    # ====================== 终极稳定版：申请理由统计 ======================
+                    # 规则：找到“申请理由” → 取它后面所有内容 → 直接统计字数
                     elif "申请理由" in cell_text:
-                        # 你指定的标准：先按 paragraphs 读
-                        reason_paragraphs = [p.text.strip() for p in cell.paragraphs if p.text.strip()]
-                        reason_text = "\n".join(reason_paragraphs)
-                        reason_text = re.sub(r"\s+", "", reason_text)
-                        count = len(reason_text.replace(" ", ""))
+                        # 取出整个单元格的所有文字（无视换行、无视段落）
+                        full_text = cell.text
 
-                        # 🔥 关键修复：如果 paragraphs 读出来为0，强制用 cell.text 兜底（100%能读到）
-                        if count == 0:
-                            full_text = cell.text.strip()
-                            full_text = re.sub(r"申请理由.*?[:：]", "", full_text)
-                            full_text = re.sub(r"\s+", "", full_text)
-                            count = len(full_text)
-
-                        # 再检查下一格（兼容你的表格格式）
-                        if count == 0 and i + 1 < len(all_cells):
-                            next_cell = all_cells[i+1]
-                            next_text = next_cell.text.strip()
-                            next_text = re.sub(r"\s+", "", next_text)
-                            count = len(next_text)
-
-                        res["reason_length"] = count
+                        # 从“申请理由”这四个字后面开始，截取所有内容
+                        if "申请理由" in full_text:
+                            reason_part = full_text.split("申请理由", 1)[-1]  # 只保留后面所有内容
+                            
+                            # 清洗：去掉所有空白、换行、标点符号
+                            reason_part = re.sub(r"\s+", "", reason_part)
+                            reason_part = re.sub(r"[：:]", "", reason_part)
+                            
+                            # 统计字数
+                            res["reason_length"] = len(reason_part)
                     # ====================================================================
 
         except Exception as e:
             print(f"解析异常: {e}")
-            return res
         return res
