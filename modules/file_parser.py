@@ -33,64 +33,69 @@ class FileParser:
         return FileParser._parse_docx(path)
 
     @staticmethod
-    def _parse_docx(path):
-        """精准提取：仅从表格中「联系方式/电话」后一格提取手机号，无兜底"""
-        res = {
-            "is_supported": False, 
-            "reason_length": 0, 
-            "name": "未知", 
-            "sid": None, 
-            "apply_class": "",
-            "phone": ""  # 手机号字段
-        }
-        try:
-            doc = Document(path)
-            
-            # 1. 提取班级（通过搜索标题行）
-            for para in doc.paragraphs:
-                text = para.text.replace(" ", "")
-                # 匹配：XXX班报名申请表
-                match = re.search(r"(.+?班)报名申请表", text)
-                if match:
-                    res["apply_class"] = match.group(1)
-                    break
+def _parse_docx(path):
+    res = {
+        "is_supported": False,
+        "reason_length": 0,
+        "name": "未知",
+        "sid": None,
+        "apply_class": "",
+        "phone": ""
+    }
+    try:
+        doc = Document(path)
 
-            if doc.tables:
-                table = doc.tables[0]
-                # 将表格内容展平处理，按单元格顺序存储
-                full_text_list = [cell.text.strip() for row in table.rows for cell in row.cells]
-                
-                for i, text in enumerate(full_text_list):
-                    # 提取姓名
-                    if text == "姓名" and i + 1 < len(full_text_list):
-                        res["name"] = full_text_list[i+1]
-                    # 提取学号（仅保留数字）
-                    if text == "学号" and i + 1 < len(full_text_list):
-                        res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
-                    # 提取资助对象状态
-                    if "资助对象" in text:
-                        context = "".join(full_text_list[i:i+3])
-                        res["is_supported"] = "是" in context and "不是" not in context
-                    # 提取申请理由长度
-                    if "申请理由" in text:
-                        content = full_text_list[i] if len(full_text_list[i]) > 30 else (full_text_list[i+1] if i+1 < len(full_text_list) else "")
-                        content = re.sub(r"申请理由.*?[:：]", "", content).strip()
-                        res["reason_length"] = len(re.sub(r"\s+", "", content))
-                    
-                    # ========== 核心修改：仅提取「联系方式/电话」后一格的手机号 ==========
-                    if any(keyword in text for keyword in ["联系方式"]):
-                        # 只取后一格的内容，且仅保留数字
-                        if i + 1 < len(full_text_list):
-                            phone_raw = full_text_list[i+1]
-                            # 过滤出所有数字（避免空格/符号干扰）
-                            phone_digits = "".join(filter(str.isdigit, phone_raw))
-                            # 确保是11位手机号（可选：非11位则置空）
-                            if len(phone_digits) == 11:
-                                res["phone"] = phone_digits
-                            else:
-                                res["phone"] = ""  # 非11位则不提取
-                        break  # 找到联系方式后直接退出循环，避免重复提取
-                    
-        except Exception:
-            pass
-        return res
+        # 提取班级
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            match = re.search(r"(.+班)报名申请表", text)
+            if match:
+                res["apply_class"] = match.group(1)
+                break
+
+        if not doc.tables:
+            return res
+
+        table = doc.tables[0]
+
+        # 逐行读取（精准匹配你的表格）
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+
+            for i, text in enumerate(cells):
+                # ==============================================
+                # 姓名
+                if "姓名" in text and i + 1 < len(cells):
+                    res["name"] = cells[i+1]
+
+                # 学号
+                if "学号" in text and i + 1 < len(cells):
+                    res["sid"] = "".join(filter(str.isdigit, cells[i+1]))
+
+                # 联系方式（你要的：后一格直接提取）
+                if "联系方式" in text and i + 1 < len(cells):
+                    phone = cells[i+1]
+                    res["phone"] = "".join(filter(str.isdigit, phone))
+
+                # ==============================================
+                # ✅ 资助对象：修复版！整行找“是”
+                if "是否为学生资助对象" in text:
+                    # 把这一行后面所有内容拼起来
+                    row_text = "".join(cells[i:])
+                    # 只要出现“是” → 就是资助对象
+                    if "是" in row_text:
+                        res["is_supported"] = True
+                    else:
+                        res["is_supported"] = False
+
+                # ==============================================
+                # 申请理由长度
+                if "申请理由" in text:
+                    content = cells[i] if len(cells[i]) > 30 else (cells[i+1] if i+1 < len(cells) else "")
+                    content = re.sub(r"申请理由[^：]*[:：]", "", content).strip()
+                    res["reason_length"] = len(re.sub(r"\s+", "", content))
+
+    except Exception:
+        pass
+
+    return res
