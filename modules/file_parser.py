@@ -9,20 +9,14 @@ class FileParser:
     def parse(path):
         ext = str(path).lower()
         if ext.endswith('.pdf'):
-            # 创建临时 docx 文件路径
             with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_docx:
                 tmp_docx_path = tmp_docx.name
             
             try:
-                # 核心步骤：将 PDF 转换为 Docx
                 cv = Converter(path)
-                cv.convert(tmp_docx_path, start=0, end=1) # 只转第一页，节省资源
+                cv.convert(tmp_docx_path, start=0, end=1)
                 cv.close()
-                
-                # 调用 docx 解析逻辑
                 res = FileParser._parse_docx(tmp_docx_path)
-                
-                # 清理临时文件
                 if os.path.exists(tmp_docx_path):
                     os.remove(tmp_docx_path)
                 return res
@@ -34,15 +28,20 @@ class FileParser:
 
     @staticmethod
     def _parse_docx(path):
-        """你之前最稳健的 Docx 解析代码"""
-        res = {"is_supported": False, "reason_length": 0, "name": "未知", "sid": None, "apply_class": "", "contact": ""}
+        res = {
+            "is_supported": False,
+            "reason_length": 0,
+            "name": "未知",
+            "sid": None,
+            "apply_class": "",
+            "contact": ""
+        }
         try:
             doc = Document(path)
             
-            # 1. 提取班级（通过搜索标题行）
+            # 提取班级
             for para in doc.paragraphs:
                 text = para.text.replace(" ", "")
-                # 匹配：XXX班报名申请表
                 match = re.search(r"(.+?班)报名申请表", text)
                 if match:
                     res["apply_class"] = match.group(1)
@@ -50,31 +49,40 @@ class FileParser:
 
             if doc.tables:
                 table = doc.tables[0]
-                # 将表格内容展平处理，增加容错性
                 full_text_list = [cell.text.strip() for row in table.rows for cell in row.cells]
                 
                 for i, text in enumerate(full_text_list):
+                    # 姓名
                     if text == "姓名" and i + 1 < len(full_text_list):
                         res["name"] = full_text_list[i+1]
+                    # 学号
                     if text == "学号" and i + 1 < len(full_text_list):
-                        # 仅保留数字
                         res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
-                    # 新增：提取联系方式（手机号/电话）
-                    if any(key in text for key in ["联系方式"]):
+                    # 联系方式（手机/电话）
+                    if any(key in text for key in ["联系方式", "电话", "手机", "联系电话"]):
                         if i + 1 < len(full_text_list):
-                            # 提取数字+可能的分隔符（保留手机号格式）
                             contact = re.sub(r"[^\d\- ]", "", full_text_list[i+1])
                             res["contact"] = contact.strip()
+                    # 资助对象
                     if "资助对象" in text:
-                        # 检查当前格或后两格是否有“是”
                         context = "".join(full_text_list[i:i+3])
                         res["is_supported"] = "是" in context and "不是" not in context
+
+                    # ====================== 核心修复 ======================
+                    # 申请理由：优先读当前格，再读下一格，兼容“标题+内容同格”
                     if "申请理由" in text:
-                        # 理由通常在当前单元格（如果标题和内容合在一起）或下一个单元格
-                        content = full_text_list[i] if len(full_text_list[i]) > 30 else (full_text_list[i+1] if i+1 < len(full_text_list) else "")
-                        # 去除“申请理由”字样及其后的标点
-                        content = re.sub(r"申请理由.*?[:：]", "", content).strip()
-                        res["reason_length"] = len(re.sub(r"\s+", "", content))
+                        # 先读当前单元格内容
+                        current_content = full_text_list[i]
+                        # 再读下一单元格内容
+                        next_content = full_text_list[i+1] if (i+1 < len(full_text_list)) else ""
+                        # 合并
+                        total_content = current_content + next_content
+                        # 清洗掉标题文字
+                        total_content = re.sub(r"申请理由.*?[:：]", "", total_content).strip()
+                        # 去空白统计真实长度
+                        res["reason_length"] = len(re.sub(r"\s+", "", total_content))
+                    # ======================================================
+
         except Exception:
             pass
         return res
