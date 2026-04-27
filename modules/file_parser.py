@@ -48,60 +48,59 @@ class FileParser:
                     res["apply_class"] = match.group(1)
                     break
 
-            # 先把整个表格所有文字全部提取出来（专治合并单元格）
-            full_table_text = ""
-            reason_candidates = []
+            # 全局全文文本（解决合并单元格读不到的问题）
+            full_text = ""
 
+            # 先把整个表格所有内容读出来
+            all_cells_text = []
             if doc.tables:
                 table = doc.tables[0]
-                all_cells = []
                 for row in table.rows:
                     for cell in row.cells:
-                        txt = cell.text.strip()
-                        all_cells.append(txt)
-                        full_table_text += " " + txt
+                        t = cell.text.strip()
+                        all_cells_text.append(t)
+                        full_text += " " + t
 
-                        # 收集所有包含“申请理由”的段落
-                        if "申请理由" in txt:
-                            reason_candidates.append(txt)
-                final_reason = ""
-                # 从所有包含申请理由的文本里找最长的一段
-                for cand in reason_candidates:
-                    if len(cand) > len(final_reason):
-                        final_reason = cand
+            # ====================== 1. 修复资助对象判断（合并单元格兼容） ======================
+            # 只要全文任意位置出现“是” + 附近有“资助对象”，就判定为是
+            if "资助对象" in full_text and "是" in full_text:
+                res["is_supported"] = True
+            else:
+                res["is_supported"] = False
 
-                # 截取“申请理由”后面所有内容
-                if "申请理由" in final_reason:
-                    final_reason = final_reason.split("申请理由", 1)[-1]
+            # ====================== 2. 修复申请理由字数（合并单元格兼容） ======================
+            reason_text = ""
+            for txt in all_cells_text:
+                if "申请理由" in txt:
+                    reason_text = txt
+                    break
 
-                # 清洗空白、标点
-                final_reason = re.sub(r"\s+", "", final_reason)
-                final_reason = re.sub(r"[：:]", "", final_reason)
-                res["reason_length"] = len(final_reason)
-                # ==========================================================================
+            # 截取“申请理由”之后所有内容
+            if "申请理由" in reason_text:
+                reason_text = reason_text.split("申请理由", 1)[1]
 
-                # 正常解析其他字段
-                for i, cell_text in enumerate(all_cells):
-                    # 姓名
-                    if cell_text == "姓名" and i + 1 < len(all_cells):
-                        res["name"] = all_cells[i+1].strip()
+            # 清洗并统计字数（保留标点，去掉空白）
+            reason_text = re.sub(r"\s+", "", reason_text)
+            res["reason_length"] = len(reason_text)
 
-                    # 学号
-                    elif cell_text == "学号" and i + 1 < len(all_cells):
-                        sid = all_cells[i+1].strip()
-                        res["sid"] = "".join(filter(str.isdigit, sid))
+            # ====================== 3. 提取姓名、学号、联系方式 ======================
+            for i, txt in enumerate(all_cells_text):
+                # 姓名
+                if txt == "姓名" and i + 1 < len(all_cells_text):
+                    res["name"] = all_cells_text[i+1].strip()
 
-                    # 联系方式
-                    elif any(k in cell_text for k in ["联系方式"]):
-                        if i + 1 < len(all_cells):
-                            contact = all_cells[i+1].strip()
-                            res["contact"] = re.sub(r"[^\d\- ]", "", contact).strip()
+                # 学号
+                if txt == "学号" and i + 1 < len(all_cells_text):
+                    sid_val = all_cells_text[i+1].strip()
+                    res["sid"] = "".join(filter(str.isdigit, sid_val))
 
-                    # 资助对象
-                    elif "资助对象" in cell_text:
-                        res["is_supported"] = "是" in cell_text
+                # 联系方式
+                if any(key in txt for key in ["联系方式", "电话", "手机"]):
+                    if i + 1 < len(all_cells_text):
+                        contact_val = all_cells_text[i+1].strip()
+                        res["contact"] = re.sub(r"[^\d\s\-]", "", contact_val).strip()
 
         except Exception as e:
-            print("解析错误:", e)
+            print("解析异常:", e)
 
         return res
