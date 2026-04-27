@@ -8,6 +8,7 @@ from email.utils import parsedate_to_datetime, parseaddr
 from email.message import Message
 from email import message_from_bytes
 from pathlib import Path
+# 注意：请确保 config/email_parser/email_client/excel_handler 模块存在
 from modules.config import Config
 from modules.email_parser import EmailParser
 from modules.email_client import SecureIMAPClient
@@ -54,14 +55,15 @@ with cb:
 # ========== 核心审核逻辑 ==========
 if st.button("🚀 开始审核", disabled=not (user and pwd)):
     with st.spinner("正在连接邮箱并扫描附件..."):
+        # 读取辅助名单
         H = eh.read_student_list(hongji) if hongji else set()
         L = eh.read_student_list(last) if last else set()
         B = eh.read_student_list(blacklist) if blacklist else set()
         
         ok_final = []
         no_final = []
-        student_records = {}
-        student_admitted_class = {}
+        student_records = {}  # 主键：学号 | 无学号时：NO_SID_UID
+        student_first_apply = {}  # 新增：记录学生首次报名的班级和时间（解决多班级录取逻辑）
 
         try:
             with SecureIMAPClient(user, pwd, folder) as client:
@@ -91,54 +93,143 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 info = FileParser.parse(str(docs[0]))
                                 f_name = info.get("name", "未知")
                                 f_sid = str(info.get("sid", "")).strip()
+                                f_phone = info.get("phone", "")  # 新增：提取手机号
                                 apply_class = info.get("apply_class", "")
                                 if not apply_class:
                                     class_match = re.search(r"([^+、\s]+班)", subj)
                                     apply_class = class_match.group(1).strip() if class_match else "未知班级"
 
-                                # 4. 审核逻辑
+                                # 4. 处理邮件时间
+                                try:
+                                    d_utc = parsedate_to_datetime(msg["Date"])
+                                    d_local = d_utc.astimezone()
+                                    if not (s_date <= d_local.date() <= e_date): continue
+                                except: 
+                                    d_local = datetime.now()
+
+                                # 5. 审核逻辑
                                 current_record = None
                                 if not f_sid:
                                     current_record = {
-                                        "name": f_name, "sid": "缺失", "class": apply_class,
-                                        "status": "reject", "reason": "报名表内未填写学号",
-                                        "subject": subj, "date": datetime.now()
+                                        "name": f_name, 
+                                        "sid": "缺失", 
+                                        "class": apply_class,
+                                        "phone": f_phone,  # 新增：手机号
+                                        "is_hongji": "否", # 新增：是否新鸿基
+                                        "status": "reject", 
+                                        "reason": "报名表内未填写学号",
+                                        "subject": subj, 
+                                        "date": d_local
                                     }
                                 else:
-                                    try:
-                                        d_utc = parsedate_to_datetime(msg["Date"])
-                                        d_local = d_utc.astimezone()
-                                        if not (s_date <= d_local.date() <= e_date): continue
-                                    except: d_local = datetime.now()
+                                    # 标记是否新鸿基
+                                    is_hongji = "是" if f_sid in H else "否"
 
                                     # 自动化审核规则
                                     if f_sid in B:
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "黑名单人员", "subject": subj, "date": d_local}
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "reject", 
+                                            "reason": "黑名单人员", 
+                                            "subject": subj, 
+                                            "date": d_local
+                                        }
                                     elif f_sid in H:
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "accept", "reason": "", "remark": "新鸿基录取", "date": d_local}
-                                        student_admitted_class[f_sid] = apply_class
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "accept", 
+                                            "reason": "", 
+                                            "remark": "新鸿基录取", 
+                                            "date": d_local
+                                        }
                                     elif f_sid in L:
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "去年已录取", "subject": subj, "date": d_local}
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "reject", 
+                                            "reason": "去年已录取", 
+                                            "subject": subj, 
+                                            "date": d_local
+                                        }
                                     elif not info.get("is_supported", False):
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": "非资助对象", "subject": subj, "date": d_local}
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "reject", 
+                                            "reason": "非资助对象", 
+                                            "subject": subj, 
+                                            "date": d_local
+                                        }
                                     elif info.get("reason_length", 0) < Config.MIN_REASON_LENGTH:
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "reject", "reason": f"理由不足({info['reason_length']}字)", "subject": subj, "date": d_local}
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "reject", 
+                                            "reason": f"理由不足({info['reason_length']}字)", 
+                                            "subject": subj, 
+                                            "date": d_local
+                                        }
                                     else:
-                                        current_record = {"name": f_name, "sid": f_sid, "class": apply_class, "status": "accept", "reason": "", "remark": "审核通过", "date": d_local}
-                                        student_admitted_class[f_sid] = apply_class
+                                        current_record = {
+                                            "name": f_name, 
+                                            "sid": f_sid, 
+                                            "class": apply_class,
+                                            "phone": f_phone,
+                                            "is_hongji": is_hongji,
+                                            "status": "accept", 
+                                            "reason": "", 
+                                            "remark": "审核通过", 
+                                            "date": d_local
+                                        }
 
-                                # 5. 去重逻辑
+                                # 6. 修复多班级报名逻辑：保留首次报名的班级（早报名优先）
                                 if current_record:
                                     sid_key = f_sid if f_sid and f_sid != "缺失" else f"NO_SID_{uid}"
+                                    
+                                    # 首次报名：直接记录
                                     if sid_key not in student_records:
                                         student_records[sid_key] = current_record
+                                        # 记录首次报名信息（仅针对录取状态）
+                                        if current_record["status"] == "accept":
+                                            student_first_apply[sid_key] = {
+                                                "class": apply_class,
+                                                "date": d_local
+                                            }
                                     else:
                                         existing = student_records[sid_key]
+                                        # 规则1：已拒绝 → 新记录是录取 → 更新（但班级保留首次报名的）
                                         if existing["status"] == "reject" and current_record["status"] == "accept":
+                                            # 检查是否有首次报名记录，有则用首次班级
+                                            if sid_key in student_first_apply:
+                                                current_record["class"] = student_first_apply[sid_key]["class"]
                                             student_records[sid_key] = current_record
+                                        # 规则2：同状态 → 保留更早的记录（拒绝/录取都保留早的）
                                         elif existing["status"] == current_record["status"]:
-                                            if current_record["date"] > existing["date"]:
+                                            if current_record["date"] < existing["date"]:
                                                 student_records[sid_key] = current_record
+                                                # 更新首次报名记录
+                                                if current_record["status"] == "accept":
+                                                    student_first_apply[sid_key] = {
+                                                        "class": apply_class,
+                                                        "date": d_local
+                                                    }
 
                             bar.progress((idx+1)/total, text=f"解析中：{idx+1}/{total} 封")
                         except Exception as e:
@@ -152,21 +243,25 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "学号": record["sid"], 
                                 "姓名": record["name"], 
                                 "录取班级": record["class"], 
+                                "联系方式": record["phone"],  # 新增：手机号
+                                "是否新鸿基": record["is_hongji"],  # 新增：是否新鸿基
                                 "备注": record.get("remark", ""), 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
                                 "date_obj": record["date"],
-                                "class_sort": record["class"]  # 新增：用于整体按班级排序
+                                "class_sort": record["class"]
                             })
                         else:
                             no_final.append({
                                 "学号": record["sid"], 
                                 "姓名": record["name"], 
                                 "报名班级": record["class"], 
+                                "联系方式": record["phone"],  # 新增：手机号
+                                "是否新鸿基": record["is_hongji"],  # 新增：是否新鸿基
                                 "原因": record["reason"], 
                                 "报名时间": record["date"].strftime("%Y-%m-%d %H:%M"),
                                 "原主题": record["subject"],
                                 "date_obj": record["date"],
-                                "class_sort": record["class"]  # 新增：用于整体按班级排序
+                                "class_sort": record["class"]
                             })
 
                     # 缓存结果
@@ -180,10 +275,10 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
         except Exception as ex:
             st.error(f"❌ 运行出错：{str(ex)}")
 
-# ========== 修复后：先按班级分类，再按时间排序 ==========
+# ========== 分组排序函数 ==========
 def group_and_sort(data, class_key):
     """
-    第一步：按班级分组；第二步：组内按报名时间排序；第三步：整体按班级名称排序
+    第一步：按班级分组；第二步：组内按报名时间升序排序；第三步：整体按班级名称排序
     :param data: 原始名单数据
     :param class_key: 班级字段名（录取名单用"录取班级"，拒绝名单用"报名班级"）
     :return: 1. 分组排序后的字典 2. 整体按班级+时间排序的列表（用于下载）
@@ -211,7 +306,7 @@ def group_and_sort(data, class_key):
     
     return sorted_groups, total_sorted_list
 
-# ========== 结果展示与下载（修复核心） ==========
+# ========== 结果展示与下载 ==========
 if st.session_state.audit_result["total"] > 0:
     ok_final = st.session_state.audit_result["ok_final"]
     no_final = st.session_state.audit_result["no_final"]
