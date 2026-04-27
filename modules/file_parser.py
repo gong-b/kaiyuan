@@ -28,14 +28,21 @@ class FileParser:
                 return res
             except Exception as e:
                 print(f"PDF 转换失败: {e}")
-                return {"name": "转换失败", "sid": None, "apply_class": "PDF解析异常"}
+                return {"name": "转换失败", "sid": None, "apply_class": "PDF解析异常", "phone": ""}
                 
         return FileParser._parse_docx(path)
 
     @staticmethod
     def _parse_docx(path):
-        """你之前最稳健的 Docx 解析代码"""
-        res = {"is_supported": False, "reason_length": 0, "name": "未知", "sid": None, "apply_class": ""}
+        """精准提取：仅从表格中「联系方式/电话」后一格提取手机号，无兜底"""
+        res = {
+            "is_supported": False, 
+            "reason_length": 0, 
+            "name": "未知", 
+            "sid": None, 
+            "apply_class": "",
+            "phone": ""  # 手机号字段
+        }
         try:
             doc = Document(path)
             
@@ -50,29 +57,40 @@ class FileParser:
 
             if doc.tables:
                 table = doc.tables[0]
-                # 将表格内容展平处理，增加容错性
+                # 将表格内容展平处理，按单元格顺序存储
                 full_text_list = [cell.text.strip() for row in table.rows for cell in row.cells]
                 
                 for i, text in enumerate(full_text_list):
+                    # 提取姓名
                     if text == "姓名" and i + 1 < len(full_text_list):
                         res["name"] = full_text_list[i+1]
+                    # 提取学号（仅保留数字）
                     if text == "学号" and i + 1 < len(full_text_list):
-                        # 仅保留数字
                         res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
-                    if "联系方式" in text :
-                        if i + 1 < len(full_text_list):
-                            phone = full_text_list[i+1]
-                            res["phone"] = "".join(filter(str.isdigit, phone))  # 仅保留数字
+                    # 提取资助对象状态
                     if "资助对象" in text:
-                        # 检查当前格或后两格是否有“是”
                         context = "".join(full_text_list[i:i+3])
                         res["is_supported"] = "是" in context and "不是" not in context
+                    # 提取申请理由长度
                     if "申请理由" in text:
-                        # 理由通常在当前单元格（如果标题和内容合在一起）或下一个单元格
                         content = full_text_list[i] if len(full_text_list[i]) > 30 else (full_text_list[i+1] if i+1 < len(full_text_list) else "")
-                        # 去除“申请理由”字样及其后的标点
                         content = re.sub(r"申请理由.*?[:：]", "", content).strip()
                         res["reason_length"] = len(re.sub(r"\s+", "", content))
+                    
+                    # ========== 核心修改：仅提取「联系方式/电话」后一格的手机号 ==========
+                    if any(keyword in text for keyword in ["联系方式"]):
+                        # 只取后一格的内容，且仅保留数字
+                        if i + 1 < len(full_text_list):
+                            phone_raw = full_text_list[i+1]
+                            # 过滤出所有数字（避免空格/符号干扰）
+                            phone_digits = "".join(filter(str.isdigit, phone_raw))
+                            # 确保是11位手机号（可选：非11位则置空）
+                            if len(phone_digits) == 11:
+                                res["phone"] = phone_digits
+                            else:
+                                res["phone"] = ""  # 非11位则不提取
+                        break  # 找到联系方式后直接退出循环，避免重复提取
+                    
         except Exception:
             pass
         return res
