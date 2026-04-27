@@ -32,7 +32,7 @@ class FileParser:
                 
         return FileParser._parse_docx(path)
 
-    @staticmethod
+@staticmethod
 def _parse_docx(path):
     res = {
         "is_supported": False,
