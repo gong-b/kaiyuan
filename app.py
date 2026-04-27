@@ -10,7 +10,7 @@ from email import message_from_bytes
 from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
-
+from file_parser import FileParser
 # 模拟配置模块（补充缺失的Config类）
 class Config:
     MIN_REASON_LENGTH = 50  # 申请理由最小长度要求
@@ -126,9 +126,6 @@ class SecureIMAPClient:
                 msg = message_from_bytes(data[0][1])
                 emails.append((uid, msg))
         return emails
-
-# 导入文件解析器
-from file_parser import FileParser
 
 # ========== 初始化与页面配置 ==========
 if "audit_result" not in st.session_state:
