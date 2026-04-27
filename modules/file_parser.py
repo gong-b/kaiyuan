@@ -30,7 +30,7 @@ class FileParser:
     def _parse_docx(path):
         res = {
             "is_supported": False,
-            "reason_length": 0,  # 保留该字段
+            "reason_length": 0,
             "name": "未知",
             "sid": None,
             "apply_class": "",
@@ -59,50 +59,46 @@ class FileParser:
                 # 遍历所有单元格，解析信息
                 for i, cell in enumerate(all_cells):
                     cell_text = cell.text.strip()
-
                     # 姓名
                     if cell_text == "姓名" and i + 1 < len(all_cells):
                         res["name"] = all_cells[i+1].text.strip()
-
                     # 学号
                     elif cell_text == "学号" and i + 1 < len(all_cells):
                         sid_text = all_cells[i+1].text.strip()
                         res["sid"] = "".join(filter(str.isdigit, sid_text))
-
                     # 联系方式
                     elif any(key in cell_text for key in ["联系方式", "电话", "手机", "联系电话"]):
                         if i + 1 < len(all_cells):
                             contact_text = all_cells[i+1].text.strip()
                             contact = re.sub(r"[^\d\- ]", "", contact_text)
                             res["contact"] = contact.strip()
-
                     # 资助对象
                     elif "资助对象" in cell_text:
                         res["is_supported"] = "是" in cell_text
 
-                    # ====================== 核心修复：申请理由解析 ======================
+                    # ====================== 终极修复：申请理由解析 ======================
                     elif "申请理由" in cell_text:
-                        # 情况1：理由和标题在同一个单元格里（用你指定的方式统计）
-                        reason_paragraphs: list[str] = [
-                            p.text.strip()
-                            for p in cell.paragraphs
-                            if p.text.strip()
-                        ]
-                        reason_text: str = "\n".join(reason_paragraphs)
+                        # 你指定的标准：先按 paragraphs 读
+                        reason_paragraphs = [p.text.strip() for p in cell.paragraphs if p.text.strip()]
+                        reason_text = "\n".join(reason_paragraphs)
                         reason_text = re.sub(r"\s+", "", reason_text)
-                        res["reason_length"] = len(reason_text.replace(" ", ""))
+                        count = len(reason_text.replace(" ", ""))
 
-                        # 情况2：理由在同一行的下一个单元格里（如果情况1的结果为0，再检查下一格）
-                        if res["reason_length"] == 0 and i + 1 < len(all_cells):
+                        # 🔥 关键修复：如果 paragraphs 读出来为0，强制用 cell.text 兜底（100%能读到）
+                        if count == 0:
+                            full_text = cell.text.strip()
+                            full_text = re.sub(r"申请理由.*?[:：]", "", full_text)
+                            full_text = re.sub(r"\s+", "", full_text)
+                            count = len(full_text)
+
+                        # 再检查下一格（兼容你的表格格式）
+                        if count == 0 and i + 1 < len(all_cells):
                             next_cell = all_cells[i+1]
-                            next_paragraphs: list[str] = [
-                                p.text.strip()
-                                for p in next_cell.paragraphs
-                                if p.text.strip()
-                            ]
-                            next_reason_text: str = "\n".join(next_paragraphs)
-                            next_reason_text = re.sub(r"\s+", "", next_reason_text)
-                            res["reason_length"] = len(next_reason_text.replace(" ", ""))
+                            next_text = next_cell.text.strip()
+                            next_text = re.sub(r"\s+", "", next_text)
+                            count = len(next_text)
+
+                        res["reason_length"] = count
                     # ====================================================================
 
         except Exception as e:
