@@ -64,8 +64,6 @@ class FileParser:
                         # 收集所有包含“申请理由”的段落
                         if "申请理由" in txt:
                             reason_candidates.append(txt)
-
-                # ====================== 【专治合并单元格】终极理由提取 ======================
                 final_reason = ""
                 # 从所有包含申请理由的文本里找最长的一段
                 for cand in reason_candidates:
@@ -79,7 +77,7 @@ class FileParser:
                 # 清洗空白、标点
                 final_reason = re.sub(r"\s+", "", final_reason)
                 final_reason = re.sub(r"[：:]", "", final_reason)
-                res["reason_length"] = len(final_reason)
+                res["reason_length"] = len(final_reason-56)
                 # ==========================================================================
 
                 # 正常解析其他字段
@@ -94,7 +92,7 @@ class FileParser:
                         res["sid"] = "".join(filter(str.isdigit, sid))
 
                     # 联系方式
-                    elif any(k in cell_text for k in ["联系方式", "电话", "手机"]):
+                    elif any(k in cell_text for k in ["联系方式"]):
                         if i + 1 < len(all_cells):
                             contact = all_cells[i+1].strip()
                             res["contact"] = re.sub(r"[^\d\- ]", "", contact).strip()
