@@ -77,7 +77,7 @@ class FileParser:
                 # 清洗空白、标点
                 final_reason = re.sub(r"\s+", "", final_reason)
                 final_reason = re.sub(r"[：:]", "", final_reason)
-                res["reason_length"] = len(final_reason-56)
+                res["reason_length"] = len(final_reason)
                 # ==========================================================================
 
                 # 正常解析其他字段
