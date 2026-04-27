@@ -59,6 +59,10 @@ class FileParser:
                     if text == "学号" and i + 1 < len(full_text_list):
                         # 仅保留数字
                         res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
+                    if "联系方式" in text :
+                        if i + 1 < len(full_text_list):
+                            phone = full_text_list[i+1]
+                            res["phone"] = "".join(filter(str.isdigit, phone))  # 仅保留数字
                     if "资助对象" in text:
                         # 检查当前格或后两格是否有“是”
                         context = "".join(full_text_list[i:i+3])
