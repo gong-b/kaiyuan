@@ -9,7 +9,7 @@ class FileParser:
     def parse(path):
         ext = str(path).lower()
         if ext.endswith('.pdf'):
-            with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp_docx:
+            with tempfile.NamedNamedTemporaryFile(suffix='.docx', delete=False) as tmp_docx:
                 tmp_docx_path = tmp_docx.name
             
             try:
@@ -22,7 +22,7 @@ class FileParser:
                 return res
             except Exception as e:
                 print(f"PDF 转换失败: {e}")
-                return {"name": "转换失败", "sid": None, "apply_class": "PDF解析异常", "contact": ""}
+                return {"is_supported": False, "reason_length": 0, "name": "转换失败", "sid": None, "apply_class": "PDF解析异常", "contact": ""}
                 
         return FileParser._parse_docx(path)
 
@@ -47,42 +47,61 @@ class FileParser:
                     res["apply_class"] = match.group(1)
                     break
 
+            # 按单元格逐行解析（精准匹配你的标准）
             if doc.tables:
                 table = doc.tables[0]
-                full_text_list = [cell.text.strip() for row in table.rows for cell in row.cells]
-                
-                for i, text in enumerate(full_text_list):
-                    # 姓名
-                    if text == "姓名" and i + 1 < len(full_text_list):
-                        res["name"] = full_text_list[i+1]
-                    # 学号
-                    if text == "学号" and i + 1 < len(full_text_list):
-                        res["sid"] = "".join(filter(str.isdigit, full_text_list[i+1]))
-                    # 联系方式（手机/电话）
-                    if any(key in text for key in ["联系方式", "电话", "手机", "联系电话"]):
-                        if i + 1 < len(full_text_list):
-                            contact = re.sub(r"[^\d\- ]", "", full_text_list[i+1])
-                            res["contact"] = contact.strip()
-                    # 资助对象
-                    if "资助对象" in text:
-                        context = "".join(full_text_list[i:i+3])
-                        res["is_supported"] = "是" in context and "不是" not in context
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
 
-                    # ====================== 核心修复 ======================
-                    # 申请理由：优先读当前格，再读下一格，兼容“标题+内容同格”
-                    if "申请理由" in text:
-                        # 先读当前单元格内容
-                        current_content = full_text_list[i]
-                        # 再读下一单元格内容
-                        next_content = full_text_list[i+1] if (i+1 < len(full_text_list)) else ""
-                        # 合并
-                        total_content = current_content + next_content
-                        # 清洗掉标题文字
-                        total_content = re.sub(r"申请理由.*?[:：]", "", total_content).strip()
-                        # 去空白统计真实长度
-                        res["reason_length"] = len(re.sub(r"\s+", "", total_content))
-                    # ======================================================
+                        # 姓名
+                        if cell_text == "姓名":
+                            next_cell = FileParser._get_next_cell(row, cell)
+                            if next_cell:
+                                res["name"] = next_cell.strip()
 
-        except Exception:
-            pass
+                        # 学号
+                        elif cell_text == "学号":
+                            next_cell = FileParser._get_next_cell(row, cell)
+                            if next_cell:
+                                res["sid"] = "".join(filter(str.isdigit, next_cell.strip()))
+
+                        # 联系方式
+                        elif any(key in cell_text for key in ["联系方式", "电话", "手机", "联系电话"]):
+                            next_cell = FileParser._get_next_cell(row, cell)
+                            if next_cell:
+                                contact = re.sub(r"[^\d\- ]", "", next_cell.strip())
+                                res["contact"] = contact
+
+                        # 资助对象
+                        elif "资助对象" in cell_text:
+                            res["is_supported"] = "是" in cell_text
+
+                        # ====================== 你指定的申请理由解析规则 ======================
+                        elif "申请理由" in cell_text:
+                            # 完全使用你提供的逻辑
+                            reason_paragraphs: list[str] = [
+                                p.text.strip()
+                                for p in cell.paragraphs
+                                if p.text.strip()
+                            ]
+                            reason_text: str = "\n".join(reason_paragraphs)
+                            reason_text = re.sub(r"\s+", "", reason_text)
+                            res["reason_length"] = len(reason_text.replace(" ", ""))
+                        # ====================================================================
+
+        except Exception as e:
+            print(f"解析异常: {e}")
+            return res
         return res
+
+    @staticmethod
+    def _get_next_cell(row, current_cell):
+        """获取同一行的下一个单元格内容"""
+        try:
+            idx = row.cells.index(current_cell)
+            if idx + 1 < len(row.cells):
+                return row.cells[idx + 1].text.strip()
+        except:
+            return None
+        return None
