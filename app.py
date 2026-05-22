@@ -76,6 +76,32 @@ def extract_info_from_subject(subject):
         pass
     return name, sid, class_name
 
+# ========== 提取邮件正文中的链接 ==========
+def extract_links_from_email(msg):
+    """提取邮件正文中的所有http/https链接"""
+    links = []
+    # 正则匹配链接
+    link_pattern = re.compile(r'https?://[^\s]+', re.IGNORECASE)
+    
+    def _extract_from_part(part):
+        if part.get_content_maintype() == 'multipart':
+            for subpart in part.get_payload():
+                _extract_from_part(subpart)
+        else:
+            # 提取文本内容
+            charset = part.get_content_charset() or 'utf-8'
+            try:
+                content = part.get_payload(decode=True).decode(charset, errors='replace')
+                # 查找所有链接
+                found_links = link_pattern.findall(content)
+                links.extend(found_links)
+            except:
+                pass
+    
+    _extract_from_part(msg)
+    # 去重并返回
+    return list(set(links))
+
 # ========== 核心审核逻辑 ==========
 if st.button("🚀 开始审核", disabled=not (user and pwd)):
     with st.spinner("正在连接邮箱并扫描附件..."):
@@ -118,19 +144,28 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             docs = ep.extract_attachments(msg, tmp_path)
 
                             # ==============================================
-                            # 情况1：没有任何附件 → 拒绝：未上传附件
+                            # 情况1：没有任何附件 → 检查是否有链接
                             # ==============================================
                             if not docs:
+                                # 提取邮件正文中的链接
+                                links = extract_links_from_email(msg)
+                                # 判定拒绝原因
+                                if links:
+                                    reason = f"仅含链接无附件（链接：{'; '.join(links[:3])}）"  # 最多显示3个链接
+                                else:
+                                    reason = "未上传附件且无链接"
+                                
                                 record = {
                                     "name": name_from_subj,
                                     "sid": sid_from_subj,
                                     "class": class_from_subj,
                                     "status": "reject",
-                                    "reason": "未上传附件",
+                                    "reason": reason,
                                     "subject": subj,
                                     "date": d_local,
                                     "contact": "",
-                                    "reason_length": 0
+                                    "reason_length": 0,
+                                    "sender_email": sender_email  # 记录发件人邮箱
                                 }
                                 key = sid_from_subj if sid_from_subj != "未知" else f"NO_{uid}"
                                 if key not in student_records:
@@ -183,7 +218,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "date": d_local,
                                 "contact": contact,
                                 "reason_length": reason_len,
-                                "remark": remark if status == "accept" else ""
+                                "remark": remark if status == "accept" else "",
+                                "sender_email": sender_email  # 记录发件人邮箱
                             }
 
                             # 去重：保留最早的有效记录
@@ -202,6 +238,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                     except Exception as e:
                         # 解析出错 → 无法解析附件
                         name_from_subj, sid_from_subj, class_from_subj = extract_info_from_subject(subj)
+                        sender_email = parseaddr(msg.get("From", ""))[1]
                         err_record = {
                             "name": name_from_subj,
                             "sid": sid_from_subj,
@@ -211,7 +248,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             "subject": subj,
                             "date": datetime.now(),
                             "contact": "",
-                            "reason_length": 0
+                            "reason_length": 0,
+                            "sender_email": sender_email  # 记录发件人邮箱
                         }
                         student_records[f"ERR_{uid}"] = err_record
                         logging.error(f"邮件{uid}错误：{str(e)}")
@@ -230,6 +268,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             "申请理由字数": rec["reason_length"],
                             "报名时间": rec["date"].strftime("%Y-%m-%d %H:%M"),
                             "备注": rec.get("remark", ""),
+                            "发件人邮箱": rec.get("sender_email", ""),
                             "date_obj": rec["date"]
                         })
                     else:
@@ -243,6 +282,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             "申请理由字数": rec["reason_length"],
                             "报名时间": rec["date"].strftime("%Y-%m-%d %H:%M"),
                             "原主题": rec["subject"],
+                            "发件人邮箱": rec.get("sender_email", ""),
                             "date_obj": rec["date"]
                         })
 
