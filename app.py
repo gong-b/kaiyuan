@@ -51,7 +51,7 @@ with cb:
     s_date = st.date_input("开始日期", datetime(2026,3,1))
     e_date = st.date_input("截止日期", datetime(2026,5,1))
 
-# ========== 从主题提取姓名、学号、班级（通用所有邮件） ==========
+# ========== 从主题提取姓名、学号、班级（仅作为兜底） ==========
 def extract_info_from_subject(subject):
     name = "未知"
     sid = "未知"
@@ -128,9 +128,6 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                         if any(prefix in subj[:5].upper() for prefix in ["RE:", "FW:", "回复:", "转发:"]):
                             continue
 
-                        # 统一从主题提取信息
-                        name_from_subj, sid_from_subj, class_from_subj = extract_info_from_subject(subj)
-
                         # 获取时间
                         try:
                             d_utc = parsedate_to_datetime(msg["Date"])
@@ -144,7 +141,7 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             docs = ep.extract_attachments(msg, tmp_path)
 
                             # ==============================================
-                            # 情况1：没有任何附件 → 检查是否有链接
+                            # 情况1：没有任何附件 → 检查是否有链接（兜底逻辑不变）
                             # ==============================================
                             if not docs:
                                 # 提取邮件正文中的链接
@@ -155,6 +152,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 else:
                                     reason = "未上传附件且无链接"
                                 
+                                # 无附件时才使用主题提取的信息
+                                name_from_subj, sid_from_subj, class_from_subj = extract_info_from_subject(subj)
                                 record = {
                                     "name": name_from_subj,
                                     "sid": sid_from_subj,
@@ -173,34 +172,37 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 continue
 
                             # ==============================================
-                            # 情况2：有附件 → 正常解析
+                            # 情况2：有附件 → 优先使用附件解析的信息（核心修改）
                             # ==============================================
-                            info = dp.parse(str(docs[0]))
-                            f_name = info.get("name", name_from_subj)
-                            f_sid = info.get("sid", sid_from_subj)
-                            apply_class = info.get("apply_class", class_from_subj)
-                            contact = info.get("contact", "")
-                            reason_len = info.get("reason_length", 0)
-                            is_supported = info.get("is_supported", False)
+                            # 解析附件（优先来源）
+                            attach_info = dp.parse(str(docs[0]))
+                            
+                            # 优先使用附件信息，为空时才用主题兜底
+                            final_name = attach_info.get("name") or extract_info_from_subject(subj)[0]
+                            final_sid = attach_info.get("sid") or extract_info_from_subject(subj)[1]
+                            final_class = attach_info.get("apply_class") or extract_info_from_subject(subj)[2]
+                            contact = attach_info.get("contact", "")
+                            reason_len = attach_info.get("reason_length", 0)
+                            is_supported = attach_info.get("is_supported", False)
 
-                            # 审核规则
-                            if not f_sid:
+                            # 审核规则（基于附件解析的信息）
+                            if not final_sid:  # 使用附件解析的学号
                                 reason = "学号缺失"
                                 status = "reject"
-                            elif f_sid in B:
+                            elif final_sid in B:  # 黑名单校验
                                 reason = "黑名单人员"
                                 status = "reject"
-                            elif f_sid in H:
+                            elif final_sid in H:  # 新鸿基校验
                                 reason = ""
                                 status = "accept"
                                 remark = "新鸿基录取"
-                            elif f_sid in L:
+                            elif final_sid in L:  # 去年录取校验
                                 reason = "去年已录取"
                                 status = "reject"
-                            elif not is_supported:
+                            elif not is_supported:  # 资助对象校验
                                 reason = "非资助对象"
                                 status = "reject"
-                            elif reason_len < Config.MIN_REASON_LENGTH:
+                            elif reason_len < Config.MIN_REASON_LENGTH:  # 理由字数校验
                                 reason = f"理由不足({reason_len}字)"
                                 status = "reject"
                             else:
@@ -209,9 +211,9 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 remark = "审核通过"
 
                             current_record = {
-                                "name": f_name,
-                                "sid": f_sid if f_sid else "缺失",
-                                "class": apply_class,
+                                "name": final_name,          # 附件解析的姓名
+                                "sid": final_sid,            # 附件解析的学号
+                                "class": final_class,        # 附件解析的班级
                                 "status": status,
                                 "reason": reason,
                                 "subject": subj,
@@ -219,11 +221,11 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                                 "contact": contact,
                                 "reason_length": reason_len,
                                 "remark": remark if status == "accept" else "",
-                                "sender_email": sender_email  # 记录发件人邮箱
+                                "sender_email": sender_email
                             }
 
                             # 去重：保留最早的有效记录
-                            sid_key = f_sid if f_sid else f"NO_{uid}"
+                            sid_key = final_sid if final_sid else f"NO_{uid}"  # 使用附件解析的学号作为key
                             if sid_key not in student_records:
                                 student_records[sid_key] = current_record
                             else:
@@ -236,7 +238,8 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
 
                         bar.progress((idx+1)/total, text=f"解析中：{idx+1}/{total}")
                     except Exception as e:
-                        # 解析出错 → 无法解析附件
+                        # 解析出错 → 兜底使用主题信息
+                        subj = ep.parse_subject(msg)
                         name_from_subj, sid_from_subj, class_from_subj = extract_info_from_subject(subj)
                         sender_email = parseaddr(msg.get("From", ""))[1]
                         err_record = {
@@ -249,13 +252,13 @@ if st.button("🚀 开始审核", disabled=not (user and pwd)):
                             "date": datetime.now(),
                             "contact": "",
                             "reason_length": 0,
-                            "sender_email": sender_email  # 记录发件人邮箱
+                            "sender_email": sender_email
                         }
                         student_records[f"ERR_{uid}"] = err_record
                         logging.error(f"邮件{uid}错误：{str(e)}")
                         continue
 
-                # 生成最终名单
+                # 生成最终名单（逻辑不变）
                 for rec in student_records.values():
                     is_hj = "新鸿基录取" in rec.get("remark", "")
                     if rec["status"] == "accept":
